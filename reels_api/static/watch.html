@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0b0d">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="robots" content="noindex">
+<title>{{title}}</title>
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+{{image_tag}}
+<meta property="og:url" content="{{url}}">
+<meta property="og:type" content="video.other">
+<meta property="og:site_name" content="reels">
+<link rel="stylesheet" href="/static/style.css">
+<script type="application/json" id="reel-data">{{reel_json}}</script>
+<script type="module" src="/static/watch.js"></script>
+</head>
+<body>
+<!-- The player block from app.html without close, prev/next, Share, Copy link and WhatsApp (links spec 6.1).
+     A change to the player markup in app.html must be mirrored here. -->
+<div id="player" class="player" hidden>
+  <div class="player-backdrop"></div>
+  <div class="player-row">
+    <div class="player-inner">
+      <div class="player-stage">
+        <div class="player-frame">
+          <video playsinline loop preload="auto"></video>
+          <div class="nsfw-cover" hidden>
+            <span class="nsfw-label">NSFW</span>
+            <button class="btn nsfw-reveal" type="button" data-action="reveal">tap to watch</button>
+          </div>
+          <div class="idle-bar">
+            <div class="idle-track"><div class="idle-fill"></div></div>
+            <p class="idle-hint">tap for options</p>
+          </div>
+          <div class="chrome">
+            <div class="chrome-top">
+              <span class="source"><span data-icon="clock"></span><span class="js-source"></span></span>
+            </div>
+            <div class="chrome-bottom">
+              <p class="caption js-caption"></p>
+              <div class="controls">
+                <span class="time js-elapsed">0:00</span>
+                <input class="scrubber" type="range" min="0" max="1" step="0.1" value="0" aria-label="seek">
+                <span class="time total js-duration">0:00</span>
+                <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
+              </div>
+              <div class="actions">
+                <button class="btn save" type="button" data-action="save"><span data-icon="download"></span><span class="spinner" aria-hidden="true"></span>Save</button>
+              </div>
+              <a class="login-hint" href="/?reel={{id}}">have the passcode? <u>log in</u></a>
+            </div>
+          </div>
+        </div>
+        <div class="controls desk-controls">
+          <span class="time js-elapsed">0:00</span>
+          <input class="scrubber" type="range" min="0" max="1" step="0.1" value="0" aria-label="seek">
+          <span class="time total js-duration">0:00</span>
+          <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
+        </div>
+      </div>
+      <aside class="player-panel">
+        <span class="source"><span data-icon="clock"></span><span class="js-source"></span></span>
+        <p class="caption js-caption"></p>
+        <div class="panel-actions">
+          <div class="panel-row">
+            <button class="btn save" type="button" data-action="save"><span data-icon="download"></span><span class="spinner" aria-hidden="true"></span>Download</button>
+          </div>
+        </div>
+        <a class="login-hint" href="/?reel={{id}}">have the passcode? <u>log in</u></a>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

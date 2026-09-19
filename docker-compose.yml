@@ -1,0 +1,34 @@
+services:
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"   # reachable from the VM only; Caddy fronts it
+    env_file: .env
+    environment:
+      STORAGE_DIR: /data/files
+      TEMP_DIR: /data/tmp
+    volumes:
+      - ./data:/data
+      # Uncomment to enable Instagram (and NSFW/protected X) downloads, and set COOKIES_FILE=/cookies.txt in .env
+      # - ./cookies.txt:/cookies.txt:ro
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Only the host name. Caddy must not see API_KEY or WEB_PASSCODE, so no env_file here.
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

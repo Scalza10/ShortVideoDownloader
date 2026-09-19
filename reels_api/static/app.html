@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0b0d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Reels">
+<title>reels</title>
+<meta name="robots" content="noindex">
+<meta property="og:title" content="reels">
+<meta property="og:description" content="reels your friends pasted. no names, ever.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="reels">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<script type="module" src="/static/app.js"></script>
+</head>
+<body data-cookie="{{cookie}}">
+<header class="topbar">
+  <span class="wordmark">reels</span>
+  <span class="count"><span id="count-n"></span> in the pile<span class="count-extra"> · no names, ever</span></span>
+  <form id="paste" class="paste" autocomplete="off" novalidate>
+    <div class="paste-field">
+      <span id="paste-icon" class="paste-icon"></span>
+      <input id="paste-input" type="text" inputmode="url" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="paste a link" placeholder="paste a link">
+      <button id="paste-submit" class="paste-submit" type="submit" aria-label="add"><span class="paste-submit-icon" data-icon="arrowUp"></span><span class="paste-submit-label">add</span></button>
+    </div>
+    <p id="paste-url" class="paste-url" hidden></p>
+    <p id="paste-error" class="paste-error" role="alert" hidden><span class="paste-error-lead">couldn't grab that one.</span><span id="paste-error-hint" class="paste-error-hint"></span></p>
+  </form>
+</header>
+<main class="board">
+  <div id="grid" class="grid"></div>
+  <div id="empty" class="empty" hidden>
+    <span class="empty-box" data-icon="clipboardPlus"></span>
+    <p class="empty-title">the pile is empty</p>
+    <p class="empty-body">paste something in and it shows up for everyone.</p>
+  </div>
+  <footer class="board-foot">
+    <span>one cookie keeps you logged in</span>
+    <span aria-hidden="true">·</span>
+    <button id="logout" class="login-hint" type="button"><u>log out</u></button>
+  </footer>
+</main>
+
+<div id="player" class="player" hidden>
+  <div class="player-backdrop"></div>
+  <button class="player-close-desktop" type="button" data-action="close" aria-label="close" data-icon="x"></button>
+  <div class="player-row">
+    <div class="player-inner">
+      <button class="player-nav" type="button" data-action="prev" aria-label="previous reel" data-icon="chevronLeft"></button>
+      <div class="player-stage">
+        <div class="player-frame">
+          <video playsinline loop preload="auto"></video>
+          <div class="nsfw-cover" hidden>
+            <span class="nsfw-label">NSFW</span>
+            <button class="btn nsfw-reveal" type="button" data-action="reveal">tap to watch</button>
+          </div>
+          <div class="idle-bar">
+            <div class="idle-track"><div class="idle-fill"></div></div>
+            <p class="idle-hint"><span data-icon="arrowUp"></span>swipe for the next one · tap for options</p>
+          </div>
+          <div class="chrome">
+            <div class="chrome-top">
+              <button class="round-btn" type="button" data-action="close" aria-label="close" data-icon="x"></button>
+              <span class="source"><span data-icon="clock"></span><span class="js-source"></span></span>
+              <span class="chrome-spacer"></span>
+            </div>
+            <div class="chrome-bottom">
+              <p class="caption js-caption"></p>
+              <div class="controls">
+                <span class="time js-elapsed">0:00</span>
+                <input class="scrubber" type="range" min="0" max="1" step="0.1" value="0" aria-label="seek">
+                <span class="time total js-duration">0:00</span>
+                <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
+              </div>
+              <div class="actions">
+                <button class="btn btn-primary share" type="button" data-action="share"><span data-icon="whatsapp"></span>Share</button>
+                <button class="btn save" type="button" data-action="save"><span data-icon="download"></span><span class="spinner" aria-hidden="true"></span>Save</button>
+                <button class="btn copy" type="button" data-action="copy" aria-label="copy link"><span data-icon="link2"></span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="controls desk-controls">
+          <span class="time js-elapsed">0:00</span>
+          <input class="scrubber" type="range" min="0" max="1" step="0.1" value="0" aria-label="seek">
+          <span class="time total js-duration">0:00</span>
+          <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
+        </div>
+      </div>
+      <aside class="player-panel">
+        <span class="source"><span data-icon="clock"></span><span class="js-source"></span></span>
+        <p class="caption js-caption"></p>
+        <div class="panel-actions">
+          <button class="btn btn-primary" type="button" data-action="whatsapp"><span data-icon="whatsapp"></span>Share to WhatsApp</button>
+          <div class="panel-row">
+            <button class="btn save" type="button" data-action="save"><span data-icon="download"></span><span class="spinner" aria-hidden="true"></span>Download</button>
+            <button class="btn" type="button" data-action="copy"><span data-icon="link2"></span>Copy link</button>
+          </div>
+        </div>
+        <p class="panel-hint">← → to move through the pile · esc to close</p>
+      </aside>
+      <button class="player-nav" type="button" data-action="next" aria-label="next reel" data-icon="chevronRight"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Asks a phone whose cookie was set before the login page asked; cookie.js opens it (pop-up spec 6). -->
+<dialog id="cookie-ask" class="cookie-ask" aria-labelledby="cookie-ask-title">
+  <div class="login-step">
+    <h2 id="cookie-ask-title" class="cookie-ask-title">this site uses one cookie</h2>
+    <p class="login-note">one cookie keeps this phone logged in for a year.<br>nothing else is stored. no tracking, no ads.<br>you can log out from the board any time.</p>
+    <button id="cookie-allow" class="btn btn-primary" type="button" autofocus>allow cookie</button>
+    <p id="cookie-error" class="login-error" role="alert" hidden></p>
+    <button id="cookie-decline" class="login-hint" type="button"><u>no thanks, log me out</u></button>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

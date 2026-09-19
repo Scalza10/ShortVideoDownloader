@@ -1,0 +1,31 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.log
+
+# Downloaded and converted videos
+data/
+*.mp4
+
+# Secrets: API_KEY, WEB_PASSCODE, INVITE_TOKEN, and any other .env variant
+.env
+.env.*
+!.env.example
+
+# Instagram / x.com login cookies (extensions name them e.g. www.instagram.com_cookies.txt)
+cookies.txt
+*cookies*.txt
+
+# SSH and TLS keys (the deploy key lives in ~/.ssh, never here)
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+reels_oci*
+
+# Deploy script: its defaults are the production VM's IP and host name
+scripts/deploy.ps1
+
+# Claude Code's per-machine settings
+.claude/settings.local.json

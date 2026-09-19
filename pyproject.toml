@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not network'"
+markers = [
+    "network: hits the real internet and needs ffmpeg; run with `pytest -m network`",
+]

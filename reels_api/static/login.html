@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0b0d">
+<title>reels</title>
+<meta name="robots" content="noindex">
+<meta property="og:title" content="reels">
+<meta property="og:description" content="reels your friends pasted. no names, ever.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="reels">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+</head>
+<body class="login">
+<!-- Asks before the one cookie is set; login.js picks the state and the invite mode (cookie spec 4). -->
+<main class="login-box">
+  <h1 class="wordmark">reels</h1>
+  <section id="ask" class="login-step">
+    <p id="login-lead" class="login-lead">enter the passcode</p>
+    <form id="login-form" class="login-form" autocomplete="off">
+      <input id="passcode" class="field" type="password" autocomplete="current-password" placeholder="passcode" aria-label="passcode" required>
+      <p class="login-note">one cookie keeps this phone logged in for a year.<br>nothing else is stored. no tracking, no ads.<br>you can log out from the board any time.</p>
+      <button id="continue" class="btn btn-primary" type="submit">allow cookie &amp; log in</button>
+      <p id="login-error" class="login-error" role="alert" hidden></p>
+      <button id="decline" class="login-hint" type="button"><u>no thanks</u></button>
+    </form>
+  </section>
+  <section id="declined" class="login-step" hidden>
+    <p class="login-lead">no cookie, no login</p>
+    <p class="login-note">reels friends share with you still open without one.</p>
+    <button id="reconsider" class="login-hint" type="button"><u>changed my mind</u></button>
+  </section>
+</main>
+<script src="/static/login.js"></script>
+</body>
+</html>
