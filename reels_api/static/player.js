@@ -5,12 +5,19 @@ import { showToast } from "./toast.js";
 
 const desktopQuery = matchMedia("(min-width: 700px)");
 
+// The desktop frame takes the video's shape, from tall 9:16 to wide 16:9.
+const TALLEST_FRAME = 9 / 16;
+const WIDEST_FRAME = 16 / 9;
+
 // Phone gestures (spec 7.2).
 const TAP_SLOP_PX = 10;
 const SWIPE_FRACTION = 0.2;
 const FLICK_PX_PER_MS = 0.5;
 const SLIDE_MS = 200;
 const SPRING_MS = 160;
+
+// A double tap, double-click or held Enter on delete must not take the next reel too.
+const DELETE_GUARD_MS = 700;
 
 // A web download on iPhone lands in Files, never Photos; the share sheet's "Save Video" does (spec 7.4).
 const isIOS =
@@ -34,7 +41,7 @@ function reelLink(reel) {
 
 // Full-bleed with tap-to-reveal chrome below 700px, a centred overlay from 700px (spec 7).
 // standalone: the view-only page's single reel. No history, no closing, no swiping (links spec 8).
-export function createPlayer({ root, onGone, standalone = false }) {
+export function createPlayer({ root, onGone, onDelete = null, onFavorite = null, standalone = false }) {
   const video = root.querySelector("video");
   const frame = root.querySelector(".player-frame");
   const idleFill = root.querySelector(".idle-fill");
@@ -47,6 +54,7 @@ export function createPlayer({ root, onGone, standalone = false }) {
   // Where focus goes when the overlay opens on desktop; the view-only page has no close button.
   const desktopFocus = desktopClose || saveButtons[saveButtons.length - 1];
   const cover = root.querySelector(".nsfw-cover");
+  const starButtons = [...root.querySelectorAll('[data-action="favorite"]')];
 
   let reels = []; // snapshot of the board's order, taken on open
   let index = -1;
@@ -57,6 +65,7 @@ export function createPlayer({ root, onGone, standalone = false }) {
   let drag = null; // {id, x, y, time, dy} while a finger is down on the frame
   let sliding = false;
   let prefetch = null; // {id, controller, state: "loading" | "ready" | "failed", file}
+  let lastDelete = 0; // performance.now() of the last accepted delete, for DELETE_GUARD_MS
   const uncovered = new Set(); // NSFW reels tapped open while this page is open (NSFW cover spec 5)
 
   const current = () => reels[index];
@@ -76,10 +85,27 @@ export function createPlayer({ root, onGone, standalone = false }) {
     root.classList.toggle("chrome-on", visible);
   }
 
+  // The video always shows whole (object-fit: contain). On desktop the frame takes its shape.
+  function fit(width, height) {
+    const ratio = width > 0 && height > 0 ? width / height : TALLEST_FRAME;
+    root.style.setProperty("--frame-ar", String(Math.min(WIDEST_FRAME, Math.max(TALLEST_FRAME, ratio))));
+  }
+
   function renderVolume() {
     for (const button of volumeButtons) {
       button.innerHTML = icon(muted ? "volumeX" : "volume2");
       button.setAttribute("aria-label", muted ? "unmute" : "mute");
+    }
+  }
+
+  // Filled and pressed while the reel is a favorite (favorites spec 7).
+  function renderStar() {
+    const on = Boolean(current() && current().favorite);
+    for (const button of starButtons) {
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-pressed", String(on));
+      button.setAttribute("aria-label", on ? "remove from favorites" : "add to favorites");
+      button.querySelector(".star-icon").innerHTML = icon(on ? "starFilled" : "star");
     }
   }
 
@@ -171,6 +197,7 @@ export function createPlayer({ root, onGone, standalone = false }) {
     index = i;
     const reel = current();
     video.pause();
+    fit(reel.width, reel.height); // before the poster shows
     if (reel.thumbnail_url) video.poster = reel.thumbnail_url;
     else video.removeAttribute("poster");
     video.src = reel.file_url;
@@ -179,6 +206,7 @@ export function createPlayer({ root, onGone, standalone = false }) {
     if (covered) setChrome(false); // the cover, not the options, is what a covered reel shows first
     setText(".js-source", sourceLine(reel));
     setText(".js-caption", reel.caption || reel.title || "");
+    renderStar();
     renderNav();
     renderProgress();
     if (saveWithShareSheet) startPrefetch(reel);
@@ -246,6 +274,39 @@ export function createPlayer({ root, onGone, standalone = false }) {
     reels = [...fresh, ...reels];
     index += fresh.length;
     renderNav();
+  }
+
+  // A reel deleted on this phone: drop it and show the next one, or close when none are left (favorites spec 7).
+  function remove(id) {
+    if (!isOpen()) return;
+    const i = reels.findIndex((reel) => reel.id === id);
+    if (i === -1) return;
+    const wasCurrent = i === index;
+    reels.splice(i, 1);
+    if (!reels.length) {
+      close();
+      return;
+    }
+    if (i < index) index -= 1;
+    else if (wasCurrent && index >= reels.length) index = reels.length - 1;
+    if (wasCurrent) {
+      show(index);
+      play();
+      if (!standalone) history.replaceState({ reel: current().id }, "", reelPath(current()));
+    } else {
+      renderNav();
+    }
+  }
+
+  // A reel starred or un-starred on this phone: its new JSON, redrawn if it is showing.
+  function update(reel) {
+    const i = reels.findIndex((r) => r.id === reel.id);
+    if (i === -1) return;
+    reels[i] = reel;
+    if (i === index && isOpen()) {
+      setText(".js-source", sourceLine(reel));
+      renderStar();
+    }
   }
 
   // ---- actions (spec 7.4)
@@ -322,6 +383,17 @@ export function createPlayer({ root, onGone, standalone = false }) {
     save,
     volume: toggleMute,
     reveal: uncover,
+    delete: () => {
+      // A double tap, double-click or held Enter must not take the next reel too.
+      const now = performance.now();
+      if (now - lastDelete < DELETE_GUARD_MS) return;
+      lastDelete = now;
+      setChrome(false); // like copyLink/download; also keeps the undo toast off the scrubber/volume row
+      if (onDelete) onDelete(current());
+    },
+    favorite: () => {
+      if (onFavorite) onFavorite(current(), !current().favorite);
+    },
   };
 
   root.addEventListener("click", (event) => {
@@ -415,6 +487,11 @@ export function createPlayer({ root, onGone, standalone = false }) {
     });
   }
 
+  // The element's size, with any rotation applied, can differ from the job's.
+  video.addEventListener("loadedmetadata", () => {
+    if (isOpen() && video.videoWidth && video.videoHeight) fit(video.videoWidth, video.videoHeight);
+  });
+
   // play() refuses while covered, but media keys and the lock screen call the element directly.
   video.addEventListener("play", () => {
     if (isCovered()) video.pause();
@@ -482,5 +559,5 @@ export function createPlayer({ root, onGone, standalone = false }) {
     setChrome(false);
   });
 
-  return { open, close, isOpen, addReels };
+  return { open, close, isOpen, addReels, remove, update };
 }

@@ -1,1 +1,4 @@
 *.woff2 binary
+# proxy/ is copied to the VM by hand (scp) and never deployed; keep Linux line endings.
+/proxy export-ignore
+/proxy/** text eol=lf

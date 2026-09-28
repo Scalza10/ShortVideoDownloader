@@ -34,11 +34,38 @@
   </form>
 </header>
 <main class="board">
+  <div class="board-bar">
+    <nav class="tabs" role="tablist" aria-label="reels">
+      <button id="tab-pile" class="tab" type="button" role="tab" aria-selected="true">pile</button>
+      <button id="tab-favorites" class="tab" type="button" role="tab" aria-selected="false"><span data-icon="starFilled"></span>favorites<span id="favorites-n" class="tab-count"></span></button>
+    </nav>
+    <button id="search-toggle" class="search-toggle" type="button" aria-expanded="false" aria-controls="search" aria-label="search"></button>
+    <div id="search" class="search" role="search">
+      <div class="search-field">
+        <span class="search-icon" data-icon="search"></span>
+        <input id="search-input" type="search" autocomplete="off" enterkeyhint="search" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="search captions" aria-label="search captions">
+      </div>
+      <div class="chips" role="group" aria-label="source">
+        <button class="chip" type="button" data-source="" aria-pressed="true">all</button>
+        <button class="chip" type="button" data-source="tiktok" aria-pressed="false">tiktok</button>
+        <button class="chip" type="button" data-source="instagram" aria-pressed="false">instagram</button>
+        <button class="chip" type="button" data-source="x" aria-pressed="false">x</button>
+      </div>
+    </div>
+  </div>
   <div id="grid" class="grid"></div>
   <div id="empty" class="empty" hidden>
     <span class="empty-box" data-icon="clipboardPlus"></span>
     <p class="empty-title">the pile is empty</p>
     <p class="empty-body">paste something in and it shows up for everyone.</p>
+  </div>
+  <div id="empty-favorites" class="empty-favorites" hidden>
+    <p class="empty-title">no favorites yet</p>
+    <p class="empty-body">tap ★ on a reel to keep it after it leaves the pile.</p>
+  </div>
+  <div id="empty-search" class="empty-search" hidden>
+    <p class="empty-title">nothing matches</p>
+    <button id="search-clear" class="btn" type="button">clear search</button>
   </div>
   <footer class="board-foot">
     <span>one cookie keeps you logged in</span>
@@ -68,7 +95,10 @@
             <div class="chrome-top">
               <button class="round-btn" type="button" data-action="close" aria-label="close" data-icon="x"></button>
               <span class="source"><span data-icon="clock"></span><span class="js-source"></span></span>
-              <span class="chrome-spacer"></span>
+              <div class="chrome-end">
+                <button class="round-btn star" type="button" data-action="favorite" aria-pressed="false" aria-label="add to favorites"><span class="star-icon"></span></button>
+                <button class="round-btn" type="button" data-action="delete" aria-label="delete" data-icon="trash"></button>
+              </div>
             </div>
             <div class="chrome-bottom">
               <p class="caption js-caption"></p>
@@ -101,6 +131,10 @@
           <div class="panel-row">
             <button class="btn save" type="button" data-action="save"><span data-icon="download"></span><span class="spinner" aria-hidden="true"></span>Download</button>
             <button class="btn" type="button" data-action="copy"><span data-icon="link2"></span>Copy link</button>
+          </div>
+          <div class="panel-row">
+            <button class="btn star" type="button" data-action="favorite" aria-pressed="false" aria-label="add to favorites"><span class="star-icon"></span>favorite</button>
+            <button class="btn" type="button" data-action="delete"><span data-icon="trash"></span>delete</button>
           </div>
         </div>
         <p class="panel-hint">← → to move through the pile · esc to close</p>

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from reels_api import jobs as jobs_module
+from reels_api import jobs_file
 from reels_api.jobs import JobManager, JobStore, new_job_id
 from reels_api.models import ErrorCode, Job, JobError, JobResult, JobStatus, Source
 from tests.conftest import make_settings
@@ -676,3 +677,382 @@ async def test_find_active_by_url_returns_every_video_in_order():
     await store.add(Job(id="b", url=url, source=Source.X, item=2, status=JobStatus.FAILED))
     await store.add(Job(id="a", url=url, source=Source.X, item=1, status=JobStatus.DONE))
     assert [job.id for job in await store.find_active_by_url(url)] == ["a", "c"]
+
+
+def _saved_pile(settings, jobs):
+    jobs_file.write(settings.storage_dir / "jobs.json", jobs_file.dumps(jobs))
+
+
+async def wait_saved(settings, job_id, timeout=5.0):
+    path = settings.storage_dir / "jobs.json"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if any(job.id == job_id for job in jobs_file.load(path, settings.storage_dir)):
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("job was not saved")
+
+
+@pytest.mark.anyio
+async def test_start_restores_the_saved_pile_and_keeps_its_files(tmp_path):
+    settings = make_settings(tmp_path)
+    saved = _stored_video(settings, "saved1", datetime.now(UTC) - timedelta(minutes=5))
+    _saved_pile(settings, [saved])
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await manager.start()
+    try:
+        assert await store.get("saved1") == saved
+        assert saved.result.file_path.exists()
+        assert saved.result.thumbnail_path.exists()
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.anyio
+async def test_start_drops_a_saved_reel_whose_video_is_gone(tmp_path):
+    settings = make_settings(tmp_path)
+    gone = _stored_video(settings, "gone1", datetime.now(UTC))
+    gone.result.file_path.unlink()
+    _saved_pile(settings, [gone])
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await manager.start()
+    try:
+        assert await store.get("gone1") is None
+        assert not gone.result.thumbnail_path.exists()  # now a stray
+        assert jobs_file.load(manager.jobs_path, settings.storage_dir) == []
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.anyio
+async def test_start_restores_a_reel_whose_thumbnail_is_gone(tmp_path):
+    settings = make_settings(tmp_path)
+    saved = _stored_video(settings, "nothumb", datetime.now(UTC))
+    saved.result.thumbnail_path.unlink()
+    _saved_pile(settings, [saved])
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await manager.start()
+    try:
+        assert await store.get("nothumb") is not None
+        assert saved.result.file_path.exists()
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.anyio
+async def test_start_sweeps_saved_reels_past_their_time(tmp_path):
+    settings = make_settings(tmp_path, retention_hours=1)
+    old = _stored_video(settings, "old1", datetime.now(UTC) - timedelta(hours=2))
+    _saved_pile(settings, [old])
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await manager.start()
+    try:
+        assert await store.get("old1") is None
+        assert not old.result.file_path.exists()
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.anyio
+async def test_start_keeps_jobs_already_in_the_store(tmp_path):
+    settings = make_settings(tmp_path)
+    now = datetime.now(UTC)
+    saved = _stored_video(settings, "seed00", now - timedelta(minutes=30))
+    _saved_pile(settings, [saved])
+    seed = _stored_video(settings, "seed00", now)  # a dev-board seed, added before start
+    store = JobStore()
+    await store.add(seed)
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await manager.start()
+    try:
+        assert await store.get("seed00") is seed
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.anyio
+async def test_a_restart_keeps_the_pile(tmp_path):
+    settings = make_settings(tmp_path)
+    first = JobManager(settings, FakePipeline(settings), JobStore())
+    await first.start()
+    try:
+        [job] = await first.submit("https://vm.tiktok.com/x/")
+        await wait_finished(first.store, job.id)
+        await wait_saved(settings, job.id)
+    finally:
+        await first.stop()
+
+    store = JobStore()
+    second = JobManager(settings, FakePipeline(settings), store)
+    await second.start()
+    try:
+        again = await store.get(job.id)
+        assert again is not None
+        assert again.status == JobStatus.DONE
+        assert again.result.file_path.exists()
+        assert again.expires_at == job.expires_at
+        assert await second.submit("https://vm.tiktok.com/x/") == [again]  # no new download
+    finally:
+        await second.stop()
+
+
+@pytest.mark.anyio
+async def test_stop_saves_a_reel_that_missed_the_last_save(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await manager.start()
+    job = _stored_video(settings, "late1", datetime.now(UTC))
+    await store.add(job)  # added directly, like a save that lost the race with shutdown
+    await manager.stop()
+    assert any(j.id == "late1" for j in jobs_file.load(manager.jobs_path, settings.storage_dir))
+
+
+@pytest.mark.anyio
+async def test_sweep_saves_what_is_left(tmp_path):
+    settings = make_settings(tmp_path, retention_hours=1)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    now = datetime.now(UTC)
+    await store.add(_stored_video(settings, "old1", now - timedelta(hours=2)))
+    await store.add(_stored_video(settings, "new1", now))
+    await manager.sweep(now=now)
+    assert [job.id for job in jobs_file.load(manager.jobs_path, settings.storage_dir)] == ["new1"]
+
+
+@pytest.mark.anyio
+async def test_a_failed_save_is_logged_and_ignored(tmp_path, monkeypatch, caplog):
+    settings = make_settings(tmp_path)
+    manager = JobManager(settings, FakePipeline(settings), JobStore())
+
+    def full_disk(path, text):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(jobs_file, "write", full_disk)
+    await manager.save()
+    assert "could not save" in caplog.text
+
+
+def _favorite(job: Job) -> Job:
+    job.favorite = True
+    job.starred_at = datetime.now(UTC)
+    return job
+
+
+@pytest.mark.anyio
+async def test_sweep_keeps_favorites_past_their_time(tmp_path):
+    settings = make_settings(tmp_path, retention_hours=1)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    now = datetime.now(UTC)
+    kept = _favorite(_stored_video(settings, "kept", now - timedelta(days=3)))
+    old = _stored_video(settings, "old", now - timedelta(days=3))
+    for job in (kept, old):
+        await store.add(job)
+    await manager.sweep(now=now)
+    assert await store.get("kept") is kept
+    assert kept.result.file_path.exists()
+    assert await store.get("old") is None
+
+
+@pytest.mark.anyio
+async def test_video_cap_counts_and_evicts_only_non_favorites(tmp_path):
+    settings = make_settings(tmp_path, max_videos=2)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    now = datetime.now(UTC)
+    starred = [_favorite(_stored_video(settings, f"f{i}", now - timedelta(minutes=30 + i))) for i in range(3)]
+    plain = [_stored_video(settings, f"p{i}", now - timedelta(minutes=i)) for i in range(3)]
+    for job in (*starred, *plain):
+        await store.add(job)
+    await manager.enforce_video_cap()
+    assert {job.id for job in await store.all()} == {"f0", "f1", "f2", "p0", "p1"}
+
+
+@pytest.mark.anyio
+async def test_star_and_unstar(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    job = _stored_video(settings, "v1", datetime.now(UTC))
+    await store.add(job)
+
+    assert await manager.set_favorite("v1", True) is job
+    assert job.favorite is True
+    starred_at = job.starred_at
+    assert starred_at is not None
+    assert await manager.set_favorite("v1", True) is job  # again: nothing changes
+    assert job.starred_at == starred_at
+    assert [j.favorite for j in jobs_file.load(manager.jobs_path, settings.storage_dir)] == [True]
+
+    assert await manager.set_favorite("v1", False) is job
+    assert (job.favorite, job.starred_at) == (False, None)
+    assert await manager.set_favorite("v1", False) is job
+    assert [j.favorite for j in jobs_file.load(manager.jobs_path, settings.storage_dir)] == [False]
+
+
+@pytest.mark.anyio
+async def test_star_needs_a_done_reel(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await store.add(Job(id="queued", url="u", source=Source.TIKTOK))
+    await store.add(Job(id="failed", url="u", source=Source.TIKTOK, status=JobStatus.FAILED))
+    for job_id in ("nope", "queued", "failed"):
+        assert await manager.set_favorite(job_id, True) is None
+        assert await manager.set_favorite(job_id, False) is None
+
+
+@pytest.mark.anyio
+async def test_starring_past_the_limit_is_refused(tmp_path):
+    settings = make_settings(tmp_path, max_favorites=2)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    now = datetime.now(UTC)
+    for i in range(3):
+        await store.add(_stored_video(settings, f"v{i}", now))
+    await manager.set_favorite("v0", True)
+    await manager.set_favorite("v1", True)
+    with pytest.raises(JobError) as exc:
+        await manager.set_favorite("v2", True)
+    assert exc.value.code == ErrorCode.FAVORITES_FULL
+    assert exc.value.message == "Favorites are full (2). Remove one first."
+    assert (await store.get("v2")).favorite is False
+    assert await manager.set_favorite("v0", True) is not None  # already a favorite: never refused
+    await manager.set_favorite("v0", False)
+    assert (await manager.set_favorite("v2", True)).favorite is True
+
+
+@pytest.mark.anyio
+async def test_two_stars_for_the_last_slot_take_it_once(tmp_path):
+    settings = make_settings(tmp_path, max_favorites=1)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    now = datetime.now(UTC)
+    for job_id in ("a", "b"):
+        await store.add(_stored_video(settings, job_id, now))
+    results = await asyncio.gather(
+        manager.set_favorite("a", True), manager.set_favorite("b", True), return_exceptions=True
+    )
+    assert sum(isinstance(r, JobError) for r in results) == 1
+    assert sum(1 for job in await store.all() if job.favorite) == 1
+
+
+@pytest.mark.anyio
+async def test_a_lowered_limit_keeps_every_favorite(tmp_path):
+    settings = make_settings(tmp_path, max_favorites=1, retention_hours=1)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    now = datetime.now(UTC)
+    for i in range(3):
+        await store.add(_favorite(_stored_video(settings, f"f{i}", now - timedelta(days=2))))
+    await store.add(_stored_video(settings, "plain", now))
+    await manager.sweep(now=now)
+    await manager.enforce_video_cap()
+    assert sum(1 for job in await store.all() if job.favorite) == 3
+    with pytest.raises(JobError):
+        await manager.set_favorite("plain", True)
+    assert (await manager.set_favorite("f0", False)).favorite is False
+
+
+@pytest.mark.anyio
+async def test_an_unstarred_reel_past_its_time_goes_at_the_next_sweep(tmp_path):
+    settings = make_settings(tmp_path, retention_hours=1)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    now = datetime.now(UTC)
+    job = _favorite(_stored_video(settings, "f0", now - timedelta(days=2)))
+    await store.add(job)
+    await manager.sweep(now=now)
+    assert await store.get("f0") is job
+    await manager.set_favorite("f0", False)
+    await manager.sweep(now=now)
+    assert await store.get("f0") is None
+    assert not job.result.file_path.exists()
+
+
+@pytest.mark.anyio
+async def test_a_star_survives_a_restart(tmp_path):
+    settings = make_settings(tmp_path, retention_hours=1)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    job = _stored_video(settings, "f0", datetime.now(UTC) - timedelta(days=2))
+    job.expires_at = job.finished_at + timedelta(hours=1)
+    await store.add(job)
+    await manager.set_favorite("f0", True)
+
+    again = JobStore()
+    second = JobManager(settings, FakePipeline(settings), again)
+    await second.start()
+    try:
+        restored = await again.get("f0")
+        assert restored is not None
+        assert restored.favorite is True
+        assert restored.starred_at == job.starred_at
+        assert restored.result.file_path.exists()
+    finally:
+        await second.stop()
+
+
+@pytest.mark.anyio
+async def test_submit_of_an_old_favorites_link_returns_it(tmp_path):
+    settings = make_settings(tmp_path, retention_hours=1)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    job = _favorite(_stored_video(settings, "f0", datetime.now(UTC) - timedelta(days=2)))
+    job.url = "https://vm.tiktok.com/fav/"
+    await store.add(job)
+    assert await manager.submit("https://vm.tiktok.com/fav/") == [job]
+    assert manager.queue.empty()
+
+
+@pytest.mark.anyio
+async def test_delete_removes_the_reel_and_its_files_and_saves(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    now = datetime.now(UTC)
+    gone = _favorite(_stored_video(settings, "gone", now))  # deleting doesn't care about the star
+    kept = _stored_video(settings, "kept", now)
+    for job in (gone, kept):
+        await store.add(job)
+
+    assert await manager.delete("gone") is True
+    assert await store.get("gone") is None
+    assert not gone.result.file_path.exists()
+    assert not gone.result.thumbnail_path.exists()
+    assert kept.result.file_path.exists()
+    assert [job.id for job in jobs_file.load(manager.jobs_path, settings.storage_dir)] == ["kept"]
+
+
+@pytest.mark.anyio
+async def test_delete_needs_a_done_reel(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    running = Job(id="running", url="u", source=Source.TIKTOK, status=JobStatus.DOWNLOADING)
+    await store.add(running)
+    assert await manager.delete("nope") is False
+    assert await manager.delete("running") is False
+    assert await store.get("running") is running
+
+
+@pytest.mark.anyio
+async def test_a_deleted_reels_link_downloads_again(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await manager.start()
+    try:
+        [first] = await manager.submit("https://vm.tiktok.com/x/")
+        await wait_finished(store, first.id)
+        assert await manager.delete(first.id) is True
+        [again] = await manager.submit("https://vm.tiktok.com/x/")
+        assert again.id != first.id
+        assert (await wait_finished(store, again.id)).status == JobStatus.DONE
+    finally:
+        await manager.stop()

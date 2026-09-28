@@ -1,0 +1,28 @@
+# The VM's one reverse proxy: Caddy owns ports 80 and 443 and gets an HTTPS
+# certificate for every site in the Caddyfile. It lives in ~/proxy on the VM,
+# apart from the apps, so deploying one app never restarts it or another app.
+# Not part of the Reels deploy (.gitattributes keeps it out of git archive).
+name: proxy
+
+services:
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    # No env_file: Caddy never sees an app's secrets (API_KEY, WEB_PASSCODE, ...).
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # certificates
+      - caddy_config:/config
+    networks: [web]
+    restart: unless-stopped
+
+networks:
+  # Every app joins it too. Create it once: docker network create web
+  web:
+    external: true
+
+volumes:
+  caddy_data:
+  caddy_config:

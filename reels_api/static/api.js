@@ -48,3 +48,18 @@ export async function createJob(text) {
   if (response.ok) return body;
   return { error: body.error || "processing_failed" };
 }
+
+// Deletes a reel for everyone (favorites spec 4). A 404 means it is already gone, which is fine.
+// keepalive: the request outlives the page (sent while the page is being left).
+export async function deleteJob(id, { keepalive = false } = {}) {
+  const response = await api(`/jobs/${encodeURIComponent(id)}`, { method: "DELETE", keepalive });
+  if (!response.ok && response.status !== 404) throw new Error(`DELETE /jobs/${id} failed: ${response.status}`);
+}
+
+// Stars or un-stars a reel (favorites spec 5): the reel, or {error} with the server's error code.
+export async function setFavorite(id, on) {
+  const response = await api(`/jobs/${encodeURIComponent(id)}/favorite`, { method: on ? "PUT" : "DELETE" });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) return body;
+  return { error: body.error || "processing_failed" };
+}

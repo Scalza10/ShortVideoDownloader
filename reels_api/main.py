@@ -15,6 +15,7 @@ from reels_api.settings import Settings
 _JOB_ERROR_STATUS = {
     ErrorCode.UNSUPPORTED_URL: 400,
     ErrorCode.TOO_MANY_JOBS: 429,
+    ErrorCode.FAVORITES_FULL: 409,
 }
 
 

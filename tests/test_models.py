@@ -151,3 +151,19 @@ def test_job_to_dict_nsfw():
     job.result.nsfw = True
     assert job_to_dict(job)["nsfw"] is True
     assert "nsfw" not in job_to_dict(Job(id="q", url="u", source=Source.X))
+
+
+def test_job_to_dict_favorite():
+    job = Job(id="abc", url="u", source=Source.TIKTOK, status=JobStatus.DONE)
+    job.result = _result(10)
+    d = job_to_dict(job)
+    assert d["favorite"] is False
+    assert d["starred_at"] is None
+
+    job.favorite = True
+    job.starred_at = datetime(2026, 9, 24, 18, 2, 11, 500, tzinfo=UTC)
+    d = job_to_dict(job)
+    assert d["favorite"] is True
+    assert d["starred_at"] == "2026-09-24T18:02:11Z"
+
+    assert "favorite" not in job_to_dict(Job(id="q", url="u", source=Source.TIKTOK))

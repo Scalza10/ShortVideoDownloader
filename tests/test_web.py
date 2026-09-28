@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -6,11 +8,11 @@ from reels_api.main import create_app
 from reels_api.models import Job, JobStatus, Source
 from reels_api.web import AttemptLimiter
 from tests.conftest import make_settings
-from tests.test_routes import FakePipeline, _done_reel
+from tests.test_routes import HEADERS, FakePipeline, _done_reel
 
 PASSCODE = "letmein"
 INVITE = "invite-token-0123456789"
-APP_MODULES = ["app.js", "api.js", "format.js", "icons.js", "board.js", "paste.js", "toast.js", "player.js", "watch.js", "cookie.js"]
+APP_MODULES = ["app.js", "api.js", "format.js", "icons.js", "board.js", "paste.js", "toast.js", "player.js", "watch.js", "cookie.js", "search.js"]
 FONT_FILES = ["bricolage-grotesque-latin.woff2", "bricolage-grotesque-latin-ext.woff2"]
 GOOGLE_FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 NOTICE_LINES = (
@@ -641,3 +643,76 @@ def test_index_with_unasked_cookie_treats_share_links_as_without_cookie(web_app)
         assert _is_ask_board(client.get("/", params={"reel": reel["id"], "k": "wrong-key-000000"}))
         assert _is_expired(client.get("/", params={"reel": "nope", "k": "whatever"}))
         assert _is_expired(client.get("/", params={"reel": failed.id, "k": failed.share_key}))
+
+
+def test_index_deleted_reel_is_expired(web_app):
+    with TestClient(web_app()) as client:
+        reel = _done_reel(client)
+        assert client.delete(f"/jobs/{reel['id']}", headers=HEADERS).status_code == 204
+        assert _is_expired(client.get("/", params={"reel": reel["id"], "k": reel["share_key"]}))
+
+
+def test_board_has_pile_and_favorites_tabs(web_app):
+    with https_client(web_app()) as client:
+        client.post("/web/login", json={"passcode": PASSCODE})
+        page = client.get("/").text
+    assert '<nav class="tabs" role="tablist" aria-label="reels">' in page
+    for element_id in ("tab-pile", "tab-favorites", "favorites-n", "empty-favorites"):
+        assert f'id="{element_id}"' in page, element_id
+    assert "no favorites yet" in page
+    assert "tap ★ on a reel to keep it after it leaves the pile." in page
+
+
+def test_board_player_has_delete(web_app):
+    with https_client(web_app()) as client:
+        client.post("/web/login", json={"passcode": PASSCODE})
+        page = client.get("/").text
+    assert page.count('data-action="delete"') == 2  # the phone's top bar and the desktop panel
+
+
+def test_view_only_page_has_no_favorite_or_delete(web_app):
+    with TestClient(web_app()) as client:
+        reel = _done_reel(client)
+        page = client.get("/", params={"reel": reel["id"], "k": reel["share_key"]}).text
+    assert 'data-action="delete"' not in page
+    assert 'data-action="favorite"' not in page
+
+
+def test_board_player_has_the_star(web_app):
+    with https_client(web_app()) as client:
+        client.post("/web/login", json={"passcode": PASSCODE})
+        page = client.get("/").text
+    assert page.count('data-action="favorite"') == 2
+    assert page.count('aria-label="add to favorites"') == 2
+
+
+def test_board_has_the_search_row(web_app):
+    with https_client(web_app()) as client:
+        client.post("/web/login", json={"passcode": PASSCODE})
+        page = client.get("/").text
+    for element_id in ("search-toggle", "search", "search-input", "empty-search", "search-clear"):
+        assert f'id="{element_id}"' in page, element_id
+    for source in ("", "tiktok", "instagram", "x"):
+        assert f'<button class="chip" type="button" data-source="{source}"' in page, source
+    assert 'data-source="" aria-pressed="true">all</button>' in page  # all is pressed at first
+    assert 'placeholder="search captions"' in page
+    assert 'id="search-input" type="search" autocomplete="off"' in page  # no stale text restored from history
+    assert "nothing matches" in page
+    assert ">clear search</button>" in page
+    # The toggle is not a tab, so it must be outside the tablist.
+    assert page.index('id="search-toggle"') > page.index("</nav>")
+
+
+def test_view_only_page_has_no_search(web_app):
+    with TestClient(web_app()) as client:
+        reel = _done_reel(client)
+        page = client.get("/", params={"reel": reel["id"], "k": reel["share_key"]}).text
+    assert 'id="search-input"' not in page
+
+
+def test_search_field_is_16px_so_ios_does_not_zoom(web_app):
+    with TestClient(web_app()) as client:
+        css = client.get("/static/style.css").text
+    rule = re.search(r"\.search-field input \{([^}]*)\}", css)
+    assert rule, "no .search-field input rule"
+    assert re.search(r"font: \d+ 16px", rule.group(1))

@@ -4,7 +4,7 @@ About an hour, start to finish. You end with `https://<name>.<region>.cloudapp.a
 serving the phone page over HTTPS.
 
 **What you create in Azure:** one **Linux virtual machine**. Not App Service,
-Container Apps or Functions. The app needs Docker Compose (the app plus Caddy
+Container Apps or Functions. The app needs Docker Compose (the app, plus Caddy
 for HTTPS), ffmpeg, and one long-running process that keeps jobs in memory.
 A plain VM does all of that and is covered by the free account.
 
@@ -56,7 +56,7 @@ each tab:
 
 1. **DNS name.** Open the VM → *Overview* → next to *DNS name* click
    *Not configured* → set a label such as `myreels` → *Save*. Your address is
-   now `myreels.<region>.cloudapp.azure.com`. This is your `SITE_ADDRESS`.
+   now `myreels.<region>.cloudapp.azure.com`. It goes in the Caddyfile in step 7.
 2. **Lock SSH to your IP.** VM → *Networking* → *Network settings* → open the
    network security group → *Inbound security rules* → the SSH rule →
    *Source*: **My IP address** → *Save*. Leave 80 and 443 open to Any.
@@ -97,8 +97,11 @@ repo folder in PowerShell:
 ```powershell
 git archive --format=tar.gz -o reels.tar.gz master
 scp -i $HOME\.ssh\reels_vm reels.tar.gz azureuser@myreels.<region>.cloudapp.azure.com:~
+scp -i $HOME\.ssh\reels_vm -r proxy azureuser@myreels.<region>.cloudapp.azure.com:~/proxy
 ssh -i $HOME\.ssh\reels_vm azureuser@myreels.<region>.cloudapp.azure.com
 ```
+
+The second `scp` copies Caddy's setup to `~/proxy`; the archive leaves it out.
 
 On the VM:
 
@@ -109,20 +112,23 @@ openssl rand -hex 24          # copy the output: this is your API_KEY
 nano .env
 ```
 
-Set these four lines in `.env` (Ctrl+O, Enter, Ctrl+X to save):
+Set these three lines in `.env` (Ctrl+O, Enter, Ctrl+X to save):
 
 ```
 API_KEY=<the random value>
 WORKERS=1
 WEB_PASSCODE=<the passcode you give your friends>
-SITE_ADDRESS=myreels.<region>.cloudapp.azure.com
 ```
+
+Then, in `~/proxy/Caddyfile` (`nano ~/proxy/Caddyfile`), replace
+`reels.example.duckdns.org` with `myreels.<region>.cloudapp.azure.com`.
 
 ## 8. Start it (5 min)
 
 ```bash
-cd ~/reels
-docker compose up -d --build
+docker network create web       # once per VM; Caddy and the app meet on it
+cd ~/reels && docker compose up -d --build
+cd ~/proxy && docker compose up -d
 docker compose logs -f caddy     # wait for "certificate obtained successfully", then Ctrl+C
 curl https://myreels.<region>.cloudapp.azure.com/health
 ```
@@ -141,7 +147,8 @@ curl https://myreels.<region>.cloudapp.azure.com/health
 
 ## Updating after code changes
 
-On your PC, repeat the `git archive` and `scp` lines from step 7. On the VM:
+On your PC, repeat the `git archive` and first `scp` line from step 7 (or run
+`.\scripts\deploy.ps1` with `-VmHost`, `-Site`, `-KeyFile` and `-User`). On the VM:
 
 ```bash
 cd ~/reels && tar -xzf ~/reels.tar.gz && docker compose up -d --build
@@ -169,8 +176,8 @@ resource group to stop all charges at once.
 
 | Symptom | Check |
 |---------|-------|
-| Browser says the site can't be reached | Ports 80/443 open in the security group; `docker compose ps` shows both containers up |
-| Caddy logs show certificate errors | `SITE_ADDRESS` matches the DNS name exactly; port 80 is open (Let's Encrypt uses it) |
+| Browser says the site can't be reached | Ports 80/443 open in the security group; `docker compose ps` shows the container up in both `~/reels` and `~/proxy` |
+| Caddy logs show certificate errors (`cd ~/proxy && docker compose logs caddy`) | The name in `~/proxy/Caddyfile` matches the DNS name exactly; port 80 is open (Let's Encrypt uses it) |
 | `/` returns 404 | `WEB_PASSCODE` is empty in `.env`; set it and run `docker compose up -d` |
 | Instagram fails with "requires a login" | Add a cookies file: see "Instagram cookies" in the README |
 | Downloads fail with "blocked" | The platform is refusing Azure's IP range or yt-dlp is out of date; update `yt-dlp` first |

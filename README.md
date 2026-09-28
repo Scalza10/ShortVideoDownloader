@@ -8,8 +8,9 @@ anyone pasted plays, shares and saves. The same service has a JSON API.
 How it works: [yt-dlp](https://github.com/yt-dlp/yt-dlp) downloads the
 video, ffprobe checks the codecs, and ffmpeg copies the streams into an MP4
 (or re-encodes to H.264 + AAC when they aren't already) and grabs a
-thumbnail. Jobs live in memory; files live on disk for `RETENTION_HOURS`,
-and only the newest `MAX_VIDEOS` are kept.
+thumbnail. Finished reels stay for `RETENTION_HOURS`, at most the newest
+`MAX_VIDEOS`, and survive restarts. Starred reels (favorites) stay until
+someone un-stars them.
 
 ## Run locally with Docker
 
@@ -38,18 +39,18 @@ has to be installed.
      there is no board, only the JSON API.
 
    Leave the rest as it is. Compose sets `STORAGE_DIR` and `TEMP_DIR` to
-   `/data/...` inside the container itself, and `SITE_ADDRESS` is only for a
-   server.
+   `/data/...` inside the container itself.
 
 3. **Build and start the app:**
 
    ```bash
-   docker compose up -d --build api
+   docker network create web          # once; the compose file expects it
+   docker compose up -d --build
    ```
 
    The first build takes a few minutes (Python image, ffmpeg, yt-dlp).
-   Naming `api` starts only the app. The other service, Caddy, is for
-   HTTPS on a real host name and would want ports 80 and 443.
+   The `web` network is how Caddy reaches the app on a server; locally
+   nothing else uses it.
 
 4. **Check it runs.** Open <http://localhost:8000/health>, or:
 
@@ -78,20 +79,21 @@ Day to day:
 | To | Run |
 |---|---|
 | Follow the logs | `docker compose logs -f api` |
-| Apply a code change or a `.env` change | `docker compose up -d --build api` |
+| Apply a code change or a `.env` change | `docker compose up -d --build` |
 | Stop and remove the container | `docker compose down` |
 
 `docker compose restart` does not re-read `.env`; use `up -d` instead.
-Videos are stored in `./data/`, and every restart empties the pile (see
-[The board](#the-board-phone-web-page)).
+Videos and the list of reels (`jobs.json`) are stored in `./data/`, so the
+pile survives restarts.
 
 To try the board with generated clips and no real downloads, see
 [Trying the board without downloading anything](#trying-the-board-without-downloading-anything).
 
-On a server, `docker compose up -d --build` without `api` starts Caddy
-too: it serves `SITE_ADDRESS` on ports 80 and 443 with a Let's Encrypt
-certificate and passes requests to the app, which listens only on
-`127.0.0.1:8000`. See [Deploy](#deploy).
+On a server, HTTPS comes from Caddy, which is not in this compose file:
+it runs on its own from `proxy/` (see [Deploy](#deploy)), serves ports 80
+and 443 with a Let's Encrypt certificate for every site in
+`proxy/Caddyfile`, and reaches the app as `reels-api:8000` over the `web`
+network. The app itself listens only on `127.0.0.1:8000`.
 
 ## The board (phone web page)
 
@@ -128,6 +130,26 @@ unaffected either way.
   reel has aged out, the link shows "this reel has expired".
 - **Save** downloads the MP4. On iPhone it opens the share sheet instead,
   where **Save Video** puts it in Photos.
+- **Favorites**: the ☆ in the player (top right on a phone, under Download
+  on a desktop) keeps a reel past `RETENTION_HOURS` until someone
+  un-stars it, up to `MAX_FAVORITES` (default 200). Favorites have their
+  own tab. The pile tab shows every reel still within its hours, starred
+  ones with a ★. Un-starring a reel older than `RETENTION_HOURS` removes
+  it. There is one list of favorites for everyone.
+- **Delete**: the bin in the player deletes a reel for everyone, starred
+  or not. "undo" in the toast takes it back for 5 seconds; after that it's
+  gone, and its share links say "this reel has expired". For an X post
+  with several videos, pasting the post again after deleting one of them
+  brings back only the others, not the deleted one, while they are still
+  in the pile.
+- **Search**: on a phone, ⌕ next to the tabs opens a search field and the
+  source chips (all, tiktok, instagram, x); on a desktop they are always
+  there. The open tab then shows only the reels from that source whose
+  caption or title has every word typed, in any order, ignoring case and
+  accents, and the player swipes through those only. The counts stay as
+  they are. ✕ closes it and shows everything again, pasting a link clears
+  it, and a reload starts without it. Instagram and X account names are
+  found through the title; TikTok's aren't.
 
 On Android, **Add to Home screen** installs the page and it then appears
 in TikTok's share menu. On iPhone, paste the link.
@@ -149,10 +171,15 @@ up to 15 minutes. No page loads anything from another site: the font is
 served from `reels_api/static/fonts/`.
 
 The page needs HTTPS for sharing and for the home-screen install; in
-production that is Caddy. Restarting the app empties the pile: jobs live
-in memory, so on startup the app deletes every stored video, since none of
-them belong to a known job. The same check runs every hour to catch files
-left behind by a timed-out download.
+production that is Caddy. The pile survives restarts and deploys: the
+list of reels is saved to `jobs.json` next to the videos whenever it
+changes and read back on startup. Only downloads still running at the
+time are lost; paste those again. On startup and every hour the app also
+deletes stored files that belong to no reel, such as one left behind by a
+timed-out download. If `jobs.json` can't be read, it is renamed to
+`jobs.json.bad` and the pile starts empty: that same startup deletes the
+stored videos, favorites included, as files that belong to no reel, so
+the `.bad` file is a record, not a way to get them back.
 
 ## JSON API
 
@@ -175,21 +202,27 @@ curl -H "X-API-Key: $API_KEY" -o video.mp4 http://localhost:8000/files/k7f3q9x2.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /health` | `status`, `ytdlp_version`, and whether `ffmpeg` is on the path. No key needed. |
+| `GET /health` | `status`, `ytdlp_version`, and whether `ffmpeg` is on the path. No key needed. With the key or the login cookie it adds `recent`: `{"hours", "done", "failed"}`, the jobs that finished in the last `RETENTION_HOURS`, with the failures counted per code. Failures aren't saved, so they count from the last restart. `status` stays `ok` whatever they are. |
 | `POST /jobs` | `202 {"id", "status", "ids"}`. `ids` has one job per video: several for an X post with several videos, otherwise just `id`. For a new X link it asks X how many videos there are first, which can take up to about 20 seconds. A link that matches jobs that haven't failed returns those jobs. `400 unsupported_url` for anything but Instagram, TikTok or X, `429 too_many_jobs` when the queue has no room for all of them. |
 | `GET /jobs` | `{"jobs": [...]}`: finished reels, newest first. |
-| `GET /jobs/{id}` | The job. When done it adds `file_url`, `thumbnail_url`, `title`, `caption`, `source`, `duration_seconds`, `size_bytes`, `width`, `height`, `whatsapp_ok`, `finished_at`, `expires_at`, `share_key` and `nsfw`. When failed it adds `error` and `message`. |
+| `GET /jobs/{id}` | The job. When done it adds `file_url`, `thumbnail_url`, `title`, `caption`, `source`, `duration_seconds`, `size_bytes`, `width`, `height`, `whatsapp_ok`, `finished_at`, `expires_at`, `share_key`, `nsfw`, `favorite` and `starred_at`. When failed it adds `error` and `message`. |
 | `GET /files/{id}.mp4` | The video, as a download named after the title. |
 | `GET /files/{id}.jpg` | The thumbnail. `404` if thumbnailing failed. |
+| `PUT /jobs/{id}/favorite` | Stars a done reel: it stays past `expires_at` until un-starred. `200` and the job. `409 favorites_full` when `MAX_FAVORITES` reels are starred. |
+| `DELETE /jobs/{id}/favorite` | Un-stars it: `200` and the job. A reel already past its `expires_at` then goes at the next hourly check. |
+| `DELETE /jobs/{id}` | Deletes a done reel and its files now, starred or not. `204`. |
 
 The two `/files/` routes also open with `?k=<share_key>` instead of the key
-or cookie, for that reel only.
+or cookie, for that reel only. The favorite and delete routes answer
+`404 not_found` for anything that isn't a done reel, and never open with
+`?k=`.
 
 Job statuses: `queued`, `downloading`, `processing`, `done`, `failed`.
 Failure codes: `unsupported_url`, `private_or_removed`, `no_video`,
 `login_required`, `platform_blocked`, `processing_failed`, `timeout`.
 `source` is `instagram`, `tiktok` or `x`. `whatsapp_ok` is false
 when the file is over 16 MB. Unknown or expired jobs return `404 not_found`.
+Starring can also answer `409 favorites_full`.
 
 ## Configuration
 
@@ -200,8 +233,9 @@ All values are environment variables, read from `.env`. See `.env.example`.
 | `API_KEY` | required | Key for the JSON API. Also signs the login cookie. |
 | `WEB_PASSCODE` | empty | Passcode for the board. Empty disables the page. |
 | `INVITE_TOKEN` | empty | Secret in the invite link `/join/<token>`, at least 16 characters. Empty disables it. |
-| `RETENTION_HOURS` | `12` | How long a finished reel is kept. Checked hourly, so a reel can last up to an hour longer. |
+| `RETENTION_HOURS` | `12` | How long a finished reel is kept, unless starred. Checked hourly, so a reel can last up to an hour longer. |
 | `MAX_VIDEOS` | `100` | Most videos kept at once; the oldest goes first. |
+| `MAX_FAVORITES` | `200` | Most starred reels. They stay past `RETENTION_HOURS` and don't count toward `MAX_VIDEOS`. |
 | `WORKERS` | `2` | Concurrent downloads. Use `1` on a 1 GiB VM. |
 | `MAX_QUEUE` | `20` | Jobs waiting before `POST /jobs` answers 429. |
 | `JOB_TIMEOUT_SECONDS` | `180` | Download plus conversion budget per job. |
@@ -209,7 +243,6 @@ All values are environment variables, read from `.env`. See `.env.example`.
 | `PUBLIC_BASE_URL` | empty | Makes `file_url` and `thumbnail_url` absolute. |
 | `STORAGE_DIR`, `TEMP_DIR` | `/data/files`, `/data/tmp` | Where videos and in-progress downloads go. |
 | `LOG_LEVEL` | `info` | |
-| `SITE_ADDRESS` | | Host name Caddy serves. Only compose reads it. |
 
 ### Instagram and X cookies
 
@@ -226,6 +259,12 @@ account into the same file (one file can hold cookies for both sites).
 
 Bump `yt-dlp` in `requirements.txt` and redeploy. That fixes most
 breakages; `/health` shows the version that is running.
+
+To see whether it's time, open `https://<site>/health` on a phone that is
+logged in to the board. `recent.failed` counts the failed downloads of the
+last `RETENTION_HOURS` per code: a run of `platform_blocked` usually means
+yt-dlp is out of date, and a run of `login_required` that the Instagram or
+X cookies have expired.
 
 ## Development
 
@@ -255,7 +294,10 @@ wait 3 seconds, then fail if the URL contains `private`, `login`,
 `blocked`, `novideo` or `slow`, and otherwise succeed with a copy of a test
 clip. An x.com link containing `multi` is a post with 3 videos and adds 3
 reels; add `partial` and only the second one fails. A link containing
-`nsfw` gives an NSFW reel, and one of the seeded reels is one.
+`nsfw` gives an NSFW reel, and one of the seeded reels is one. Seeds 1 and
+11 are favorites; seed 11 is three days old, so it only shows on the
+favorites tab.
+One seed's caption has an accent ("café au lait…"), to try search with.
 
 On start it also prints an invite link and the newest reel's share link.
 Open them in a private window to see what someone without the cookie sees.
@@ -276,10 +318,23 @@ docker run --rm -p 127.0.0.1:8000:8000 -e PYTHONPATH=/app `
 
 Add `--empty` to start with an empty pile.
 
+To keep the pile across runs, add `--dir /dev-board` and the mount
+`-v "${PWD}/data/dev-board:/dev-board"` (with `--empty`: seeds are made
+fresh each run and win over saved reels with the same id).
+
 ## Deploy
 
-Production is an Oracle Cloud VM with a DuckDNS host name, running the
-Docker Compose setup above. To ship the last commit on `master`:
+Production is an Oracle Cloud VM with a DuckDNS host name. It runs two
+separate Compose projects, so the VM can host other apps too:
+
+- `~/proxy`: Caddy, copied once from this repo's `proxy/` folder. It owns
+  ports 80 and 443, holds the HTTPS certificates, and sends each host name
+  in `~/proxy/Caddyfile` to its app over the shared Docker network `web`.
+  Deploys never touch it.
+- `~/reels`: this app, from `docker-compose.yml`, joined to `web` as
+  `reels-api`.
+
+To ship the last commit on `master`:
 
 ```powershell
 .\scripts\deploy.ps1
@@ -291,9 +346,14 @@ on the PC that deploys.
 
 The script packs the commit with `git archive`, copies it to `~/reels` on
 the VM with the SSH key `~\.ssh\reels_oci`, rebuilds with
-`docker compose up -d --build`, and waits up to a minute for `/health` to
-report ok. Uncommitted changes are not deployed. The VM keeps its `.env`,
-`data/` and HTTPS certificate, but the restart empties the pile. Pass
+`docker compose up -d --build` (creating the `web` network first if it's
+missing), deletes the image the build replaced (`docker image prune -f`,
+which leaves Caddy's image, other apps' images and the build cache alone),
+and waits up to a minute for `/health` to report ok. Uncommitted changes are
+not deployed. It restarts only this app: Caddy and any other app keep
+running. The VM keeps its `.env` and `data/` (the videos and `jobs.json`,
+so the pile survives). `proxy/` is left out of the archive
+(`.gitattributes`), so a deploy can't overwrite the VM's Caddyfile. Pass
 `-VmHost`, `-Site`, `-Branch`, `-KeyFile` or `-User` to deploy elsewhere.
 
 On the VM, `docker compose logs -f api` shows the app's logs.
@@ -301,6 +361,10 @@ On the VM, `docker compose logs -f api` shows the app's logs.
 To change a setting, edit `~/reels/.env` on the VM and run
 `docker compose up -d`. The app reads `.env` only at startup, and
 `docker compose restart` would keep the old values.
+
+Adding another app to the VM, and moving a VM from the older setup (Caddy
+inside this compose file) to `~/proxy`: see "More apps on the same VM" in
+`docs/DEPLOY-ORACLE.md`.
 
 ### A new VM
 
@@ -311,11 +375,12 @@ which is what production runs on and is free indefinitely, and
 months. Their VM steps apply to other providers too. The essentials:
 
 - Open TCP 80 and 443 to everyone (Let's Encrypt needs 80) and 22 only to
-  yourself. Point a DNS name at the VM; that is `SITE_ADDRESS`.
+  yourself. Point a DNS name at the VM and put it in `~/proxy/Caddyfile`.
 - With 1 GiB of RAM, add swap and set `WORKERS=1`.
 - Create `~/reels/.env` from `.env.example` before the first deploy, with
   `API_KEY` (for example `openssl rand -hex 24`), `WEB_PASSCODE`,
-  `INVITE_TOKEN` (`openssl rand -hex 16`) and `SITE_ADDRESS`.
+  `INVITE_TOKEN` (`openssl rand -hex 16`).
+- Create the `web` network and start `~/proxy` (copied from `proxy/`).
 
 ## Docs
 

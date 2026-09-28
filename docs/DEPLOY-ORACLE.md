@@ -4,7 +4,8 @@ About an hour, start to finish. You end with `https://<name>.duckdns.org/`
 serving the board over HTTPS, on a machine that stays free indefinitely.
 
 **What you create:** one **Arm compute instance** (VM.Standard.A1.Flex) running
-Ubuntu, with Docker Compose for the app and Caddy for HTTPS. Oracle's Always
+Ubuntu, with Docker Compose for the app and a separate Caddy for HTTPS, which
+can front more apps later (see "More apps on the same VM"). Oracle's Always
 Free tier covers 4 OCPU and 24 GB of memory of Ampere Arm capacity, so this is
 free for good, unlike Azure's 12 months.
 
@@ -109,7 +110,7 @@ Oracle gives no DNS name, and Caddy needs one to get a certificate.
    nslookup <name>.duckdns.org
    ```
 
-   This is your `SITE_ADDRESS`. A no-signup alternative is `sslip.io`:
+   This name goes in the Caddyfile in section 7. A no-signup alternative is `sslip.io`:
    `203-0-113-10.sslip.io` resolves to `203.0.113.10`.
 
 ## 6. Prepare the VM (10 min)
@@ -155,8 +156,12 @@ From the repo folder on your PC:
 ```powershell
 git archive --format=tar.gz -o reels.tar.gz master
 scp -i $HOME\.ssh\reels_oci reels.tar.gz ubuntu@<public-ip>:~
+scp -i $HOME\.ssh\reels_oci -r proxy ubuntu@<public-ip>:~/proxy
 ssh -i $HOME\.ssh\reels_oci ubuntu@<public-ip>
 ```
+
+The archive leaves out `proxy/` (`.gitattributes`), so the second `scp` copies
+Caddy's setup to `~/proxy` separately.
 
 On the VM:
 
@@ -174,13 +179,15 @@ Edit these lines in place (Ctrl+O, Enter, Ctrl+X to save):
 API_KEY=<the first random value>
 WEB_PASSCODE=<the passcode you give your friends>
 INVITE_TOKEN=<the second random value>
-SITE_ADDRESS=<name>.duckdns.org
 ```
 
-Start it:
+In `~/proxy/Caddyfile`, replace `reels.example.duckdns.org` with your DuckDNS
+name (`nano ~/proxy/Caddyfile`). Then start the app, then Caddy:
 
 ```bash
-docker compose up -d --build          # first build takes 3-5 minutes
+docker network create web             # once per VM; Caddy and every app join it
+docker compose up -d --build          # in ~/reels; first build takes 3-5 minutes
+cd ~/proxy && docker compose up -d
 docker compose logs -f caddy          # wait for "certificate obtained successfully", then Ctrl+C
 curl https://<name>.duckdns.org/health
 ```
@@ -248,13 +255,154 @@ the $1 budget alert.
 | `Permission denied (publickey)` on a known-good key | The key has a passphrase and nothing supplied it, or a different key was pasted at creation. `ssh-keygen -lf ~/.ssh/authorized_keys` on the VM shows which key it accepts. |
 | Docker install ends with `Unable to locate package docker-model-plugin` | The image is Ubuntu 20.04. Terminate and recreate with 24.04. |
 | Caddy logs `Timeout during connect (likely firewall problem)` | Ports 80/443. Test from your PC: `Test-NetConnection <ip> -Port 443`. A timeout means the Security List (section 3); "refused" means iptables (section 6). Caddy retries every minute, so no restart is needed after fixing. |
-| Caddy logs certificate errors naming the wrong address | `SITE_ADDRESS` must match the DuckDNS name exactly, and DuckDNS must point at this instance's current IP. |
+| Caddy logs certificate errors naming the wrong address | The name in `~/proxy/Caddyfile` must match the DuckDNS name exactly, and DuckDNS must point at this instance's current IP. |
+| The site answers 502 | Caddy is up but can't reach the app. `docker network inspect web` should list both `proxy-caddy-1` and `reels-api-1`; if the app is missing, run `docker compose up -d` in `~/reels`. |
 | `/` returns 404 | `WEB_PASSCODE` is empty in `.env`; set it and run `docker compose up -d`. |
 | Instagram fails with "requires a login" | Add a cookies file: see "Instagram cookies" in the README. |
 | Downloads fail with "blocked" | The platform may be refusing Oracle's IP range, or `yt-dlp` is out of date; bump it in `requirements.txt` and deploy. |
 | Instance disappeared | Idle reclamation on a free-only account; see above. |
 
-App logs: `docker compose logs -f api`.
+App logs: `cd ~/reels && docker compose logs -f api`. Caddy's logs:
+`cd ~/proxy && docker compose logs -f caddy`.
+
+## More apps on the same VM
+
+Caddy runs in `~/proxy`, apart from the apps, and sends each host name to its
+app over the Docker network `web`. So another app (a to-do list, say) can live
+on the same VM with its own repo, its own `~/<app>` folder and its own deploy,
+and deploying one app never restarts another.
+
+**Adding one:**
+
+1. **DNS.** Create a second DuckDNS subdomain pointing at the same public IP.
+   No new ports are needed: every site shares 80 and 443.
+2. **The app's `docker-compose.yml`** joins `web` under a name no other app
+   uses, publishes no public port, and keeps its data (a SQLite file, say) on
+   a volume, because anything written inside a container is lost when it is
+   rebuilt:
+
+   ```yaml
+   services:
+     app:
+       build: .
+       volumes:
+         - ./data:/data
+       networks:
+         web:
+           aliases: [todo]
+       restart: unless-stopped
+
+   networks:
+     web:
+       external: true
+   ```
+
+3. **Deploy it** into its own folder, for example `~/todo`, by running
+   `docker compose up -d --build` there. A copy of `scripts/deploy.ps1` with a
+   different folder, site and health URL works. Always run an app's
+   `docker compose` commands inside its folder: Compose names each project
+   after its folder, and that is what keeps the apps apart.
+4. **Add the site to Caddy.** In `~/proxy/Caddyfile`:
+
+   ```
+   ourtodo.duckdns.org {
+       reverse_proxy todo:3000
+   }
+   ```
+
+   then apply it as in "Editing the Caddyfile" below. Caddy fetches the new
+   certificate itself.
+
+All the apps share the VM's memory and CPU, and a deploy builds its image on
+the VM, so a heavy build slows the others for a minute. `free -h` shows how
+much memory is left.
+
+### Editing the Caddyfile
+
+The Caddyfile serves every site on the VM, so check each change before
+applying it. A reload that fails changes nothing: Caddy keeps running the
+config it had. Caddy is installed only inside its container, not on the VM, so
+every `caddy` command goes through Docker, in `~/proxy`:
+
+1. Edit with `nano Caddyfile`, which writes the file in place. Editors (and
+   `sed -i`) that write a new file instead leave the container on the old
+   copy. `docker compose exec caddy cat /etc/caddy/Caddyfile` shows what Caddy
+   sees; `docker compose up -d --force-recreate caddy` picks up the new file,
+   with a second or two of downtime for every site.
+2. Check it and apply it. The reload doesn't drop connections:
+
+   ```bash
+   docker compose exec -w /etc/caddy caddy caddy validate    # ends with "Valid configuration"
+   docker compose exec -w /etc/caddy caddy caddy reload
+   docker compose logs --tail 30 caddy                       # "certificate obtained successfully", or errors
+   ```
+
+3. Optional: tidy the indentation, if a reload warned "Caddyfile input is not
+   formatted" (harmless). The container can only read the file, so use a
+   throwaway one, then reload:
+
+   ```bash
+   docker run --rm -v ~/proxy/Caddyfile:/etc/caddy/Caddyfile caddy:2 caddy fmt --overwrite /etc/caddy/Caddyfile
+   ```
+
+A site behind a password (`basic_auth`) holds a **hash** in the Caddyfile,
+never the password: make it with
+`docker compose exec caddy caddy hash-password --plaintext '<password>'` and
+paste the whole `$2a$14$…` line with nano. Through `sed` or `echo "..."`, the
+shell reads `$2`, `$14` and so on as variables and cuts them out.
+
+| What you see | Why | Fix |
+|---|---|---|
+| `Error: no config file to load` on reload | `-w /etc/caddy` is missing, so Caddy looked in `/srv` | Use the commands above |
+| `caddy: command not found` | Caddy exists only inside the container | `docker compose exec -w /etc/caddy caddy caddy ...` |
+| `base64-decoding password: illegal base64 data` | A `basic_auth` line has a plain password or a cut-short hash | Make a new hash; paste it with nano |
+| Browser: `ERR_CONNECTION_CLOSED` | Caddy has no block for that name: the reload failed or never happened, or the name is misspelled | Validate, reload, read the logs |
+| Browser: 502 | Caddy can't reach the app | `docker network inspect web` should list the app's container; `docker compose up -d` in its folder |
+| An edit seems ignored | The editor replaced the file | `docker compose up -d --force-recreate caddy` |
+
+### Moving a VM from the older setup (once)
+
+VMs set up before `~/proxy` existed run Caddy inside `~/reels`. To move one
+over with only a few seconds of downtime, first copy `proxy/` up from your PC:
+
+```powershell
+scp -i $HOME\.ssh\reels_oci -r proxy ubuntu@<public-ip>:~/proxy
+```
+
+Then on the VM:
+
+```bash
+nano ~/proxy/Caddyfile                 # put <name>.duckdns.org in place of reels.example.duckdns.org
+docker network create web
+
+# Let the running app answer as reels-api on the new network, so the new
+# Caddy can reach it before the next deploy.
+cd ~/reels && docker network connect --alias reels-api web "$(docker compose ps -q api)"
+
+# Create the new Caddy without starting it, and copy the old certificate
+# into it so it doesn't have to ask Let's Encrypt again.
+cd ~/proxy && docker compose create
+docker volume ls | grep caddy          # expect reels_caddy_data and proxy_caddy_data
+docker run --rm -v reels_caddy_data:/from:ro -v proxy_caddy_data:/to alpine cp -a /from/. /to/
+
+# The swap. The site is down only between these two lines.
+cd ~/reels && docker compose stop caddy
+cd ~/proxy && docker compose up -d
+curl https://<name>.duckdns.org/health
+```
+
+Then run `.\scripts\deploy.ps1` from your PC. It restarts the app with the new
+`docker-compose.yml` and removes the stopped old Caddy (`--remove-orphans`).
+Last, tidy up on the VM:
+
+```bash
+docker volume rm reels_caddy_data reels_caddy_config
+rm ~/reels/Caddyfile                   # the old one; the archive no longer has it
+sed -i '/SITE_ADDRESS/d' ~/reels/.env  # nothing reads it any more
+```
+
+To undo before the deploy: `cd ~/proxy && docker compose down`, then
+`cd ~/reels && docker compose start caddy`.
 
 ## Typing the passphrase once
 

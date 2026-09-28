@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from reels_api import jobs_file
 from reels_api.auth import SESSION_COOKIE, session_cookie_value, session_state, unasked_cookie_value
 from reels_api.main import create_app
 from reels_api.models import ErrorCode, Job, JobError, JobResult, JobStatus, Source
@@ -70,6 +71,55 @@ def test_health_needs_no_key(app_factory):
     assert body["status"] == "ok"
     assert isinstance(body["ytdlp_version"], str)
     assert isinstance(body["ffmpeg"], bool)
+
+
+def _finished(client, job_id, status, minutes_ago, error=None):
+    job = Job(id=job_id, url=f"https://vm.tiktok.com/{job_id}/", source=Source.TIKTOK, status=status, error=error)
+    job.finished_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+    if status == JobStatus.DONE:
+        job.result = JobResult(Path(f"{job_id}.mp4"), "T", Source.TIKTOK, 1.0, 1, 1, 1)
+    client.app.state.store._jobs[job.id] = job
+
+
+def test_health_counts_recent_jobs_by_outcome(app_factory):
+    with TestClient(app_factory(retention_hours=6)) as client:
+        _finished(client, "done1", JobStatus.DONE, 10)
+        _finished(client, "done2", JobStatus.DONE, 60)
+        _finished(client, "blocked1", JobStatus.FAILED, 5, ErrorCode.PLATFORM_BLOCKED)
+        _finished(client, "blocked2", JobStatus.FAILED, 300, ErrorCode.PLATFORM_BLOCKED)
+        _finished(client, "login1", JobStatus.FAILED, 30, ErrorCode.LOGIN_REQUIRED)
+        _finished(client, "olddone", JobStatus.DONE, 7 * 60)  # before the 6 hours
+        _finished(client, "oldblocked", JobStatus.FAILED, 7 * 60, ErrorCode.PLATFORM_BLOCKED)
+        client.app.state.store._jobs["queued"] = Job(id="queued", url="https://vm.tiktok.com/q/", source=Source.TIKTOK)
+        body = client.get("/health", headers=HEADERS).json()
+    assert body["status"] == "ok"  # failures never make the app unhealthy
+    assert body["recent"] == {"hours": 6, "done": 2, "failed": {"login_required": 1, "platform_blocked": 2}}
+
+
+def test_health_counts_a_failed_download(app_factory):
+    with TestClient(app_factory("job_error")) as client:
+        job_id = client.post("/jobs", json={"url": "https://vm.tiktok.com/x/"}, headers=HEADERS).json()["id"]
+        poll_until_finished(client, job_id)
+        recent = client.get("/health", headers=HEADERS).json()["recent"]
+    assert recent["done"] == 0
+    assert recent["failed"] == {"login_required": 1}
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
+def test_health_hides_recent_counts_without_access(app_factory, headers):
+    with TestClient(app_factory()) as client:
+        _finished(client, "blocked1", JobStatus.FAILED, 5, ErrorCode.PLATFORM_BLOCKED)
+        body = client.get("/health", headers=headers).json()
+    assert body["status"] == "ok"
+    assert "recent" not in body
+
+
+def test_health_shows_recent_counts_to_the_login_cookie(app_factory):
+    app = app_factory(web_passcode="letmein")
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, session_cookie_value(app.state.settings))
+        body = client.get("/health").json()
+    assert body["recent"] == {"hours": 6, "done": 0, "failed": {}}
 
 
 @pytest.mark.parametrize("headers", [{}, {"X-API-Key": "wrong"}])
@@ -422,3 +472,92 @@ def test_cookie_opens_files_without_share_key(app_factory):
         client.cookies.set(SESSION_COOKIE, session_cookie_value(app.state.settings))
         assert client.get(f"/files/{reel['id']}.mp4").status_code == 200
         assert client.get(f"/files/{reel['id']}.jpg").status_code == 200
+
+
+def test_star_and_unstar_answer_the_reel(app_factory):
+    with TestClient(app_factory()) as client:
+        reel = _done_reel(client)
+        assert reel["favorite"] is False
+        assert reel["starred_at"] is None
+
+        r = client.put(f"/jobs/{reel['id']}/favorite", headers=HEADERS)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["id"] == reel["id"]
+        assert body["favorite"] is True
+        assert body["starred_at"].endswith("Z")
+        assert client.get("/jobs", headers=HEADERS).json()["jobs"][0]["favorite"] is True
+        manager = client.app.state.manager
+        assert [j.favorite for j in jobs_file.load(manager.jobs_path, manager.settings.storage_dir)] == [True]
+
+        r = client.delete(f"/jobs/{reel['id']}/favorite", headers=HEADERS)
+        assert r.status_code == 200
+        assert (r.json()["favorite"], r.json()["starred_at"]) == (False, None)
+
+
+def test_star_unknown_or_unfinished_is_404(app_factory):
+    app = app_factory("block")
+    gate = app.state.manager.pipeline.gate
+    try:
+        with TestClient(app) as client:
+            running = client.post("/jobs", json={"url": "https://vm.tiktok.com/1/"}, headers=HEADERS).json()["id"]
+            for job_id in ("nope", running):
+                for method in (client.put, client.delete):
+                    r = method(f"/jobs/{job_id}/favorite", headers=HEADERS)
+                    assert r.status_code == 404, (job_id, method)
+                    assert r.json()["error"] == "not_found"
+            gate.set()
+    finally:
+        gate.set()
+
+
+def test_star_when_full_is_409(app_factory):
+    with TestClient(app_factory(max_favorites=1)) as client:
+        first = _done_reel(client, "https://vm.tiktok.com/1/")
+        second = _done_reel(client, "https://vm.tiktok.com/2/")
+        assert client.put(f"/jobs/{first['id']}/favorite", headers=HEADERS).status_code == 200
+        r = client.put(f"/jobs/{second['id']}/favorite", headers=HEADERS)
+        assert r.status_code == 409
+        assert r.json() == {"error": "favorites_full", "message": "Favorites are full (1). Remove one first."}
+        assert client.put(f"/jobs/{first['id']}/favorite", headers=HEADERS).status_code == 200
+
+
+def test_share_key_does_not_open_favorites(app_factory):
+    with TestClient(app_factory()) as client:
+        reel = _done_reel(client)
+        key = {"k": reel["share_key"]}
+        assert client.put(f"/jobs/{reel['id']}/favorite", params=key).status_code == 401
+        assert client.delete(f"/jobs/{reel['id']}/favorite", params=key).status_code == 401
+
+
+def test_delete_job(app_factory):
+    with TestClient(app_factory()) as client:
+        reel = _done_reel(client)
+        job = client.app.state.store._jobs[reel["id"]]
+        r = client.delete(f"/jobs/{reel['id']}", headers=HEADERS)
+        assert r.status_code == 204
+        assert r.content == b""
+        assert not job.result.file_path.exists()
+        assert not job.result.thumbnail_path.exists()
+        assert client.get(f"/jobs/{reel['id']}", headers=HEADERS).status_code == 404
+        assert client.get(f"/files/{reel['id']}.mp4", headers=HEADERS).status_code == 404
+        assert client.get("/jobs", headers=HEADERS).json()["jobs"] == []
+        again = client.delete(f"/jobs/{reel['id']}", headers=HEADERS)
+        assert again.status_code == 404
+        assert again.json()["error"] == "not_found"
+
+
+def test_share_key_cannot_delete(app_factory):
+    with TestClient(app_factory()) as client:
+        reel = _done_reel(client)
+        assert client.delete(f"/jobs/{reel['id']}", params={"k": reel["share_key"]}).status_code == 401
+        assert client.get(f"/jobs/{reel['id']}", headers=HEADERS).status_code == 200
+
+
+def test_cookie_can_star_and_delete(app_factory):
+    app = app_factory(web_passcode="letmein")
+    with TestClient(app) as client:
+        reel = _done_reel(client)
+        client.cookies.set(SESSION_COOKIE, session_cookie_value(app.state.settings))
+        assert client.put(f"/jobs/{reel['id']}/favorite").status_code == 200
+        assert client.delete(f"/jobs/{reel['id']}").status_code == 204

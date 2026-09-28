@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     temp_dir: Path = Path("/data/tmp")
     retention_hours: float = 12
     max_videos: int = Field(100, ge=1)  # oldest finished videos are deleted beyond this
+    max_favorites: int = Field(200, ge=1)  # starred reels, kept past retention until un-starred
     workers: int = 2
     max_queue: int = 20
     job_timeout_seconds: int = 180

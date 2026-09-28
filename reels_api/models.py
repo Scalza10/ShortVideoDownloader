@@ -34,6 +34,7 @@ class ErrorCode(StrEnum):
     PROCESSING_FAILED = "processing_failed"
     TIMEOUT = "timeout"
     TOO_MANY_JOBS = "too_many_jobs"
+    FAVORITES_FULL = "favorites_full"
 
 
 ERROR_MESSAGES: dict[ErrorCode, str] = {
@@ -45,6 +46,7 @@ ERROR_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.PROCESSING_FAILED: "The video could not be processed.",
     ErrorCode.TIMEOUT: "The download took too long and was cancelled.",
     ErrorCode.TOO_MANY_JOBS: "Too many downloads are queued. Try again in a minute.",
+    ErrorCode.FAVORITES_FULL: "Favorites are full. Remove one first.",
 }
 
 
@@ -108,6 +110,8 @@ class Job:
     message: str | None = None
     share_key: str = field(default_factory=new_share_key)
     item: int = 1  # which of the post's videos, 1-based (yt-dlp's playlist_items)
+    favorite: bool = False  # starred: kept past expires_at until un-starred (favorites spec 3)
+    starred_at: datetime | None = None
 
 
 class CreateJobRequest(BaseModel):
@@ -146,6 +150,8 @@ def job_to_dict(job: Job, public_base_url: str | None = None) -> dict:
                 "finished_at": _iso_z(job.finished_at) if job.finished_at else None,
                 "share_key": job.share_key,
                 "nsfw": r.nsfw,
+                "favorite": job.favorite,
+                "starred_at": _iso_z(job.starred_at) if job.starred_at else None,
             }
         )
     elif job.status == JobStatus.FAILED:

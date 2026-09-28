@@ -5,6 +5,7 @@ seeded reels. Making the seed clips needs ffmpeg on PATH. From the repo root:
 
     python scripts/dev_board.py            # 12 seeded reels
     python scripts/dev_board.py --empty    # empty pile
+    python scripts/dev_board.py --empty --dir data/dev-board   # a pile that survives restarts
 
 Without a local ffmpeg, run it in the project image (PowerShell). The mounts
 make edits to reels_api/static show up on reload:
@@ -19,7 +20,16 @@ wait 3 seconds, then fail if the URL contains "private", "login", "blocked",
 "novideo" or "slow", and otherwise succeed with a copy of a seed clip. An
 x.com link containing "multi" is a post with 3 videos, so it adds 3 reels;
 with "partial" too, only the second of them fails. A link containing "nsfw"
-gives an NSFW reel, and seed 3 is one.
+gives an NSFW reel, and seed 3 is one. The clips come in four shapes (9:16,
+16:9, 3:4 and 1:1): the tall ones fill the phone player and their tiles, and the
+others show whole.
+
+Seeds 1 and 11 are favorites. Seed 11 is three days old, so it only shows on
+the favorites tab. With --dir the pile is kept in that directory (jobs.json and
+the videos) and comes back on the next run. Use --empty with it: seeds are made
+fresh on every run and win over a saved reel with the same id. In Docker, mount
+a directory for it, e.g. add -v "${PWD}/data/dev-board:/dev-board" and pass
+--dir /dev-board.
 
 On start it prints the invite link and the newest seeded reel's share link.
 Open them in a private window to see what someone without the cookie sees.
@@ -79,9 +89,13 @@ CAPTIONS = [
     "cat vs cucumber, round 2",
     "",  # no caption: the page shows the title instead
     "how to fold a fitted sheet (it is not possible)",
+    "café au lait, but make it iced",  # an accent, to try search's accent folding
 ]
-SEED_MINUTES_AGO = [0.5, 4, 12, 35, 61, 95, 130, 180, 220, 260, 300, 330]
+SEED_MINUTES_AGO = [0.5, 4, 12, 35, 61, 95, 130, 180, 220, 260, 300, 3 * 24 * 60]
 NO_THUMBNAIL_SEED = 7
+FAVORITE_SEEDS = (1, 11)  # starred (favorites spec 9): seed 1 is in the pile too, seed 11 only on favorites
+# 9:16, 16:9, 3:4 and 1:1, so the page shows both filled and whole reels.
+CLIP_SIZES = [(720, 1280), (1280, 720), (720, 960), (720, 720)]
 
 
 @dataclass
@@ -89,17 +103,24 @@ class Clip:
     video: Path
     thumbnail: Path
     seconds: int
+    width: int = 720
+    height: int = 1280
+
+
+def clip_size(number: int) -> tuple[int, int]:
+    return CLIP_SIZES[number % len(CLIP_SIZES)]
 
 
 def make_clip(out_dir: Path, number: int) -> Clip:
-    """A 720x1280 test pattern with a tone, tinted per clip, plus its thumbnail."""
+    """A test pattern with a tone, tinted and shaped per clip, plus its thumbnail."""
     seconds = 8 + (number * 7) % 23  # 8..30 seconds
+    width, height = clip_size(number)
     video = out_dir / f"clip{number:02d}.mp4"
     thumbnail = out_dir / f"clip{number:02d}.jpg"
     subprocess.run(
         [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"testsrc2=size=720x1280:rate=30:duration={seconds}",
+            "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate=30:duration={seconds}",
             "-f", "lavfi", "-i", f"sine=frequency={220 + number * 40}:duration={seconds}",
             "-vf", f"hue=h={number * 60}",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
@@ -114,7 +135,7 @@ def make_clip(out_dir: Path, number: int) -> Clip:
         ],
         check=True,
     )
-    return Clip(video, thumbnail, seconds)
+    return Clip(video, thumbnail, seconds, width, height)
 
 
 def store_clip(
@@ -134,8 +155,8 @@ def store_clip(
         source=job.source,
         duration_seconds=float(clip.seconds),
         size_bytes=video.stat().st_size,
-        width=720,
-        height=1280,
+        width=clip.width,
+        height=clip.height,
         thumbnail_path=thumbnail,
         caption=caption or None,
         nsfw=nsfw,
@@ -169,7 +190,7 @@ class DevPipeline:
 
 
 def seed_jobs(settings: Settings, clips: list[Clip]) -> list[Job]:
-    """Finished jobs spread over the retention window, newest first."""
+    """Finished jobs, newest first: eleven within the retention window and a three-day-old favorite."""
     now = utcnow()
     retention = timedelta(hours=settings.retention_hours)
     jobs = []
@@ -178,6 +199,9 @@ def seed_jobs(settings: Settings, clips: list[Clip]) -> list[Job]:
         job = Job(id=f"seed{i:02d}", url=f"https://{host}/{i}", source=source, status=JobStatus.DONE)
         job.finished_at = now - timedelta(minutes=minutes)
         job.expires_at = job.finished_at + retention
+        if i in FAVORITE_SEEDS:
+            job.favorite = True
+            job.starred_at = job.finished_at + timedelta(minutes=1)
         job.result = store_clip(
             settings,
             clips[i % len(clips)],
@@ -206,14 +230,23 @@ async def _add_all(store: JobStore, jobs: list[Job]) -> None:
         await store.add(job)
 
 
+def make_root(keep_dir: Path | None) -> Path:
+    """Where this run keeps its files: keep_dir, kept on exit so the pile survives, or a fresh temp dir."""
+    if keep_dir is None:
+        return Path(tempfile.mkdtemp(prefix="reels-dev-"))
+    keep_dir.mkdir(parents=True, exist_ok=True)
+    return keep_dir
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--empty", action="store_true", help="start with an empty pile")
+    parser.add_argument("--dir", type=Path, help="keep the pile in this directory across runs (use with --empty)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
-    root = Path(tempfile.mkdtemp(prefix="reels-dev-"))
+    root = make_root(args.dir)
     settings = Settings(
         _env_file=None,
         api_key="dev",
@@ -224,7 +257,7 @@ def main() -> None:
         workers=1,
     )
     clips_dir = root / "clips"
-    clips_dir.mkdir()
+    clips_dir.mkdir(exist_ok=True)
     print("making seed clips with ffmpeg...", flush=True)
     clips = [make_clip(clips_dir, n) for n in range(CLIP_COUNT)]
 
@@ -240,7 +273,8 @@ def main() -> None:
     try:
         uvicorn.run(app, host=args.host, port=args.port)
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        if args.dir is None:
+            shutil.rmtree(root, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+# One block per site. Each app's compose file puts it on the "web" network
+# under a name, and the block sends its host name there.
+# After editing, in ~/proxy (no downtime; -w matters, or reload finds no config):
+#   docker compose exec -w /etc/caddy caddy caddy reload
+
+reels.example.duckdns.org {
+    reverse_proxy reels-api:8000
+}
+
+# todo.example.duckdns.org {
+#     reverse_proxy todo:3000
+# }

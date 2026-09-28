@@ -1,8 +1,19 @@
-// Pure text helpers shared by the board and the player.
+// Pure helpers shared by the board and the player.
 
 export const SOURCE_NAME = { tiktok: "TikTok", instagram: "Instagram", x: "X" };
 
 const MINUTE_MS = 60_000;
+
+// A tile's thumbnail may lose up to this share to fill it: enough for a phone's 9:19.5, not for 3:4.
+const MAX_FILL_CROP = 0.22;
+
+// True when a vw×vh picture can fill a bw×bh box (object-fit: cover) without losing much. Unknown sizes: false.
+export function fillsBox(vw, vh, bw, bh) {
+  if (!(vw > 0 && vh > 0 && bw > 0 && bh > 0)) return false;
+  const picture = vw / vh;
+  const box = bw / bh;
+  return 1 - Math.min(picture, box) / Math.max(picture, box) <= MAX_FILL_CROP;
+}
 
 // Tile badge: "now", "12m", "3h", "1d" since an ISO time (spec 6.2).
 export function formatAge(iso, now = Date.now()) {
@@ -34,9 +45,10 @@ export function formatExpiry(iso, now = Date.now()) {
   return `gone in ${Math.round(minutes / 60)}h`;
 }
 
-// "TikTok · 0:19 · gone in 6h", leaving out parts that are unknown.
+// "TikTok · 0:19 · gone in 6h", or "… · ★ kept" for a favorite (favorites spec 7), leaving out parts that are unknown.
 export function sourceLine(reel, now = Date.now()) {
-  return [SOURCE_NAME[reel.source] || reel.source, formatDuration(reel.duration_seconds), formatExpiry(reel.expires_at, now)]
+  const life = reel.favorite ? "★ kept" : formatExpiry(reel.expires_at, now);
+  return [SOURCE_NAME[reel.source] || reel.source, formatDuration(reel.duration_seconds), life]
     .filter(Boolean)
     .join(" · ");
 }

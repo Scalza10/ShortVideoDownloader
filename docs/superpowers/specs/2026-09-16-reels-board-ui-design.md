@@ -164,6 +164,12 @@ exactly as in the handoff's "Design tokens" section. No shadows.
 - Each tile is a `<button type="button" aria-label="play, <age> ago">`
   holding `<img loading="lazy" alt="">` with `object-fit: cover` on
   `--tile`. A job with `thumbnail_url: null` shows the bare `--tile`.
+- **Other shapes** (added 2026-09-23): cover fills only when it cuts at
+  most 22% of the thumbnail (`fillsBox` in `format.js`). Otherwise, e.g. a
+  16:9, 1:1 or 3:4 reel, the tile gets `whole`: the thumbnail with
+  `object-fit: contain` over a copy of itself (`.tile-backdrop`) with
+  cover, `blur(14px) brightness(.5)` and `scale(1.4)`, the NSFW tile's
+  blur. The stored MP4 and JPEG are never cropped or padded.
 - **Time badge** bottom-left: mobile mono 9px, 5px inset, 2px 5px padding,
   radius 4px; desktop mono 10px, 8px inset, 3px 7px, radius 5px. The
   newest tile shows the play triangle (8px) before the time.
@@ -290,8 +296,12 @@ Only one paste is in flight at a time. A 401 anywhere reloads the page
 
 ### 7.2 Mobile (< 700px)
 
-Full-screen fixed layer over the board, `background: #000`, video
-`object-fit: cover`. `body` gets `overflow: hidden` while open.
+Full-screen fixed layer over the board, `background: #000`. The video
+always shows whole (`object-fit: contain`), with black bars where its shape
+differs from the screen's, as on TikTok (changed 2026-09-23; it was `cover`,
+which cut the sides of a 9:16 reel on a taller phone and with them the
+edges of captions burned into the video). `body` gets `overflow: hidden`
+while open.
 
 **Chrome hidden** (default) — handoff screen 2: bottom scrim
 `rgba(0,0,0,.55)` → transparent, 40px top / 20px + safe-area bottom
@@ -331,8 +341,13 @@ Handoff screen 9:
   prev button (40px, hidden below 900px), video column, side panel
   (300px), next button. Prev/next are `disabled` (opacity .35) at the ends.
   The buttons are vertically centred on the video frame.
-- Video frame: height `min(520px, 74vh)`, width height × 9/16, radius
-  14px, `object-fit: cover`, `--tile` background. Control row 12px below:
+- Video frame: takes the video's shape, clamped to 9:16 … 16:9 (added
+  2026-09-23; it was always 9:16). It is as big as fits under
+  `min(520px, 74vh)` tall and `100vw − 560px` wide (`100vw − 340px` below
+  900px), so a 9:16 reel still gets 292×520. The shape comes from the
+  job's `width`/`height` before the poster shows, then from the element's
+  `videoWidth`/`videoHeight` on `loadedmetadata`. Radius 14px, `--tile`
+  background, video `object-fit: contain`. Control row 12px below:
   elapsed (mono 11px), scrubber, duration (`--ink-70`), volume button.
   Click on the video toggles play/pause.
 - Side panel, gap 18px: source line (mono 11.5px, `rgba(242,240,234,.75)`,

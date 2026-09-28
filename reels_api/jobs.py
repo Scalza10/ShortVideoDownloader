@@ -4,8 +4,11 @@ import asyncio
 import logging
 import secrets
 import shutil
+from collections import Counter
 from datetime import datetime, timedelta
+from pathlib import Path
 
+from reels_api import jobs_file
 from reels_api.models import ErrorCode, Job, JobError, JobStatus, Source, utcnow
 from reels_api.pipeline import Pipeline
 from reels_api.settings import Settings
@@ -24,7 +27,7 @@ def new_job_id() -> str:
 
 
 class JobStore:
-    """In-memory job registry. Lost on restart; that is acceptable for v1."""
+    """In-memory job registry, the source of truth. jobs.json (jobs_file) is its copy on disk."""
 
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
@@ -52,6 +55,15 @@ class JobStore:
         done.sort(key=lambda j: j.finished_at, reverse=True)
         return done[:limit]
 
+    async def count_finished_since(self, since: datetime) -> dict:
+        """Jobs finished since then: how many are done, and how many failed per error code (/health)."""
+        async with self._lock:
+            finished = [j for j in self._jobs.values() if j.finished_at is not None and j.finished_at >= since]
+        failed = Counter(
+            (j.error or ErrorCode.PROCESSING_FAILED).value for j in finished if j.status == JobStatus.FAILED
+        )
+        return {"done": sum(1 for j in finished if j.status == JobStatus.DONE), "failed": dict(sorted(failed.items()))}
+
     async def find_active_by_url(self, url: str) -> list[Job]:
         """The jobs for exactly this URL that have not failed, one per video, by item."""
         async with self._lock:
@@ -72,10 +84,14 @@ class JobManager:
         self.store = store
         self.queue: asyncio.Queue[Job] = asyncio.Queue(maxsize=settings.max_queue)
         self._tasks: list[asyncio.Task] = []
+        self._save_lock = asyncio.Lock()  # one save at a time, so the last write holds the newest state
 
     async def start(self) -> None:
-        # Jobs live only in memory, so anything on disk now is from a previous run.
-        await self._remove_untracked_files()
+        # The saved pile comes back first, so its files aren't taken for strays (favorites spec 2).
+        await self._restore()
+        await self.sweep()  # reels past their time, then files and temp dirs that belong to no job
+        await self.enforce_video_cap()
+        await self.save()
         for i in range(self.settings.workers):
             self._tasks.append(asyncio.create_task(self._worker(), name=f"worker-{i}"))
         self._tasks.append(asyncio.create_task(self._sweeper(), name="sweeper"))
@@ -85,6 +101,31 @@ class JobManager:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        # A save that was waiting on _save_lock when a task was cancelled is lost; save once more.
+        await self.save()
+
+    @property
+    def jobs_path(self) -> Path:
+        return self.settings.storage_dir / jobs_file.FILE_NAME
+
+    async def _restore(self) -> None:
+        """Add the saved reels to the store. Jobs already there (dev-board seeds) win; a reel whose video is gone is dropped."""
+        for job in jobs_file.load(self.jobs_path, self.settings.storage_dir):
+            if await self.store.get(job.id) is not None:
+                continue
+            if not job.result.file_path.is_file():
+                log.info("dropped saved job %s: its video is gone", job.id)
+                continue
+            await self.store.add(job)
+
+    async def save(self) -> None:
+        """Write the done jobs to jobs.json. A failed write is logged: memory stays the source of truth."""
+        async with self._save_lock:
+            text = jobs_file.dumps(await self.store.all())  # the snapshot, taken inside the lock
+            try:
+                await asyncio.to_thread(jobs_file.write, self.jobs_path, text)
+            except OSError:
+                log.exception("could not save %s", self.jobs_path)
 
     async def submit(self, text: str) -> list[Job]:
         """Queue one job per video of the linked post (only X posts can have several)."""
@@ -158,6 +199,7 @@ class JobManager:
             log.info("job %s finished: %s", job.id, job.status.value)
         if job.status == JobStatus.DONE:
             await self.enforce_video_cap()
+            await self.save()
 
     def _fail(self, job: Job, code: ErrorCode, message: str | None = None) -> None:
         job.finished_at = utcnow()  # first, so late set_status calls are ignored
@@ -166,11 +208,41 @@ class JobManager:
         job.message = message or JobError(code).message
 
     async def enforce_video_cap(self) -> None:
-        """Keep at most max_videos finished videos; delete the oldest first."""
-        videos = await self.store.list_recent(limit=None)  # newest first
+        """Keep at most max_videos finished videos that aren't favorites; delete the oldest first."""
+        videos = [job for job in await self.store.list_recent(limit=None) if not job.favorite]  # newest first
         for job in videos[self.settings.max_videos:]:
             await self._discard(job)
             log.info("evicted job %s: over %d videos", job.id, self.settings.max_videos)
+
+    async def set_favorite(self, job_id: str, on: bool) -> Job | None:
+        """Star or un-star a done reel (favorites spec 3). None when there is no such done reel."""
+        job = await self.store.get(job_id)
+        if job is None or job.status != JobStatus.DONE or job.result is None:
+            return None
+        if job.favorite == on:
+            return job  # already so: nothing changes, not even starred_at
+        if on:
+            favorites = sum(1 for other in await self.store.all() if other.favorite)
+            # No await from here to the star, so two phones can't both take the last slot.
+            limit = self.settings.max_favorites
+            if favorites >= limit:
+                raise JobError(ErrorCode.FAVORITES_FULL, f"Favorites are full ({limit}). Remove one first.")
+            job.starred_at = utcnow()
+        else:
+            job.starred_at = None
+        job.favorite = on
+        await self.save()
+        return job
+
+    async def delete(self, job_id: str) -> bool:
+        """Delete a done reel and its files now, starred or not (favorites spec 4). False when there is none."""
+        job = await self.store.get(job_id)
+        if job is None or job.status != JobStatus.DONE or job.result is None:
+            return False
+        await self._discard(job)
+        log.info("deleted job %s", job.id)
+        await self.save()
+        return True
 
     async def _discard(self, job: Job) -> None:
         if job.result is not None:
@@ -191,14 +263,15 @@ class JobManager:
                 log.exception("sweep failed")
 
     async def sweep(self, now: datetime | None = None) -> None:
-        """Delete finished jobs older than the retention window and untracked files."""
+        """Delete finished jobs older than the retention window, except favorites, and untracked files."""
         now = now or utcnow()
         cutoff = now - self._retention()
         for job in await self.store.all():
-            if job.finished_at is not None and job.finished_at < cutoff:
+            if job.finished_at is not None and job.finished_at < cutoff and not job.favorite:
                 await self._discard(job)
                 log.info("swept job %s", job.id)
         await self._remove_untracked_files()
+        await self.save()
 
     async def _remove_untracked_files(self) -> None:
         """Delete temp dirs and stored videos/thumbnails that belong to no known job."""

@@ -60,3 +60,11 @@ def test_invite_token_unset_empty_short_and_valid(monkeypatch):
 
     monkeypatch.setenv("INVITE_TOKEN", "a" * 16)
     assert Settings(_env_file=None).invite_token == "a" * 16
+
+
+def test_max_favorites_default_and_minimum(monkeypatch):
+    monkeypatch.setenv("API_KEY", "abc")
+    assert Settings(_env_file=None).max_favorites == 200
+    monkeypatch.setenv("MAX_FAVORITES", "0")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

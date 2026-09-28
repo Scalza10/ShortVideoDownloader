@@ -149,6 +149,10 @@ body.is-empty .board {
   transition: opacity 200ms ease-out;
 }
 .tile img.loaded { opacity: 1; }
+/* A wide or square thumbnail shows whole over a blurred copy of itself, scaled past the blur's soft
+   edge. Same blur as an NSFW tile, so a covered tile looks the same whichever rule wins. */
+.tile.whole img { object-fit: contain; }
+.tile.whole .tile-backdrop { object-fit: cover; filter: blur(14px) brightness(0.5); transform: scale(1.4); }
 .badge {
   position: absolute;
   left: 5px;
@@ -172,6 +176,102 @@ body.is-empty .board {
   border: 1px solid var(--hairline);
 }
 .tile.pending .badge { padding: 0; background: none; color: var(--accent-bright); }
+
+/* A favorite's mark (favorites spec 6). */
+.tile-star {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--scrim-badge);
+  color: var(--accent-bright);
+  pointer-events: none;
+}
+.tile-star .icon { width: 10px; height: 10px; }
+
+/* ---- tabs: pile and favorites (favorites spec 6), and search (search spec 4.2) ---- */
+
+/* The tabs, the search toggle and, on its own line on a phone, the search row. */
+.board-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 6px; padding: 0 2px 10px; }
+.tabs { display: flex; gap: 6px; }
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  font: 600 13px var(--font);
+  color: var(--ink-50);
+}
+.tab .icon { width: 12px; height: 12px; }
+.tab[aria-selected="true"] { border-color: transparent; background: var(--ink); color: var(--bg); }
+.tab-count { font: 500 11px var(--mono); }
+.tab-count:empty { display: none; }
+.search-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  color: var(--ink-50);
+}
+.search-toggle .icon { width: 16px; height: 16px; }
+/* A class, not [hidden]: the desktop shows the row while it's "closed". */
+.search { display: none; flex-basis: 100%; flex-direction: column; gap: 8px; }
+.search.is-open { display: flex; }
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+}
+.search-field:focus-within { border-color: var(--accent); }
+.search-icon { color: var(--ink-50); }
+.search-icon .icon { width: 14px; height: 14px; }
+.search-field input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  font: 400 16px var(--font); /* 16px: iOS zooms into smaller inputs */
+  color: var(--ink);
+}
+.search-field input::placeholder { color: var(--ink-42); opacity: 1; }
+.chips { display: flex; gap: 8px; }
+/* Pressed is an outline, so it doesn't read as the selected tab, which is filled. */
+.chip {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  font: 600 12px var(--font);
+  color: var(--ink-50);
+}
+.chip[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); }
+.empty-favorites, .empty-search {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 64px 40px;
+  text-align: center;
+}
 
 /* ---- NSFW cover (NSFW cover spec 4, 5) ---- */
 
@@ -270,6 +370,11 @@ body.is-empty .board-foot { margin-top: 0; }
   .board { padding: 26px 28px 48px; }
   body.is-empty .board { min-height: calc(100dvh - 75px); padding: 0 28px 24px; }
   .grid { max-width: 1100px; margin: 0 auto; gap: 12px; }
+  .board-bar { max-width: 1100px; margin: 0 auto; padding: 0 0 16px; }
+  .search-toggle { display: none; }
+  .search { display: flex; flex-basis: auto; flex-direction: row; align-items: center; gap: 10px; margin-left: auto; }
+  .search-field { width: 220px; height: 32px; }
+  .tile-star { top: 8px; right: 8px; }
   .tile { border-radius: 8px; }
   .badge { left: 8px; bottom: 8px; gap: 4px; padding: 3px 7px; border-radius: 5px; font-size: 10px; }
   .badge .icon { width: 9px; height: 9px; }
@@ -473,11 +578,22 @@ body.is-empty .paste { background: none; }
 .toast-mark .icon { width: 14px; height: 14px; stroke-width: 2.6; }
 .toast-mark.error { background: none; color: var(--danger-icon); }
 .toast-mark.error .icon { width: 22px; height: 22px; stroke-width: 1.85; }
+.toast-label { flex: 1; min-width: 0; }
+.toast-action {
+  flex: none;
+  margin: -6px -8px -6px 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font: 700 13.5px var(--font);
+  color: var(--accent-bright);
+  pointer-events: auto; /* the toast itself lets taps through */
+}
 
 /* ---- player, phone (spec 7.2) ---- */
 
 body.player-open { overflow: hidden; }
-.player { position: fixed; inset: 0; z-index: 30; overflow: hidden; background: #000; }
+/* --frame-ar: the video's shape, set by player.js; 9:16 until then. */
+.player { --frame-ar: 0.5625; position: fixed; inset: 0; z-index: 30; overflow: hidden; background: #000; }
 .player-backdrop, .player-close-desktop, .player-nav, .player-panel, .desk-controls { display: none; }
 .player-row, .player-inner, .player-stage { position: absolute; inset: 0; }
 .player-frame {
@@ -489,7 +605,8 @@ body.player-open { overflow: hidden; }
   user-select: none;
   -webkit-user-select: none;
 }
-.player-frame video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+/* Never cropped: a reel that isn't the screen's shape gets black bars, as on TikTok. */
+.player-frame video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 
 .idle-bar {
   position: absolute;
@@ -533,6 +650,7 @@ body.player-open { overflow: hidden; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: calc(16px + env(safe-area-inset-top)) 16px 0;
 }
 .round-btn {
@@ -547,7 +665,11 @@ body.player-open { overflow: hidden; }
   color: var(--ink);
 }
 .round-btn .icon { width: 16px; height: 16px; stroke-width: 2; }
-.chrome-spacer { flex: none; width: 34px; }
+.chrome-top .source { flex: 1; overflow: hidden; }
+.chrome-top .js-source { overflow: hidden; text-overflow: ellipsis; }
+.chrome-end { display: flex; flex: none; gap: 8px; }
+.star-icon { display: flex; }
+.player .star.is-on { color: var(--accent-bright); }
 .source {
   display: flex;
   align-items: center;
@@ -610,7 +732,14 @@ body.player-open { overflow: hidden; }
 /* ---- player, desktop overlay (spec 7.3) ---- */
 
 @media (min-width: 700px) {
-  .player { --frame-h: min(520px, 74vh); background: transparent; }
+  /* The frame takes the video's shape, as big as fits under 520px tall and beside the panel and buttons. */
+  .player {
+    --frame-max-h: min(520px, 74vh);
+    --frame-max-w: calc(100vw - 560px);
+    --frame-w: min(calc(var(--frame-max-h) * var(--frame-ar)), var(--frame-max-w));
+    --frame-h: calc(var(--frame-w) / var(--frame-ar));
+    background: transparent;
+  }
   body.player-open .topbar, body.player-open .board { opacity: 0.28; }
   .player-backdrop { display: block; position: absolute; inset: 0; background: var(--scrim-overlay); }
   .idle-bar, .chrome { display: none; }
@@ -634,7 +763,7 @@ body.player-open { overflow: hidden; }
   .player-frame {
     position: relative;
     inset: auto;
-    width: calc(var(--frame-h) * 9 / 16);
+    width: var(--frame-w);
     height: var(--frame-h);
     border-radius: 14px;
     background: var(--tile);
@@ -680,6 +809,7 @@ body.player-open { overflow: hidden; }
 }
 
 @media (min-width: 700px) and (max-width: 899px) {
+  .player { --frame-max-w: calc(100vw - 340px); } /* no prev/next buttons, and the panel can shrink to 220px */
   .player-nav { display: none; }
 }
 
