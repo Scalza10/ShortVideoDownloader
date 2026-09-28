@@ -93,4 +93,4 @@ So a restart or deploy keeps the pile; only queued and running downloads are los
 
 ## Process
 
-Features were built spec-first: a design in `docs/superpowers/specs/`, then a task-by-task plan in `docs/superpowers/plans/`, then small commits prefixed `feat:`, `fix:` or `docs:`. `origin` is `github.com/Scalza10/ShortVideDownloader`; `master` is the only branch.
+Features were built spec-first: a design in `docs/superpowers/specs/`, then a task-by-task plan in `docs/superpowers/plans/`, then small commits prefixed `feat:`, `fix:` or `docs:`. `origin` is `github.com/Scalza10/ShortVideoDownloader`; `master` is the only branch.

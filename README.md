@@ -21,8 +21,8 @@ has to be installed.
 1. **Get the code** and open a terminal in it:
 
    ```bash
-   git clone https://github.com/Scalza10/ShortVideDownloader.git
-   cd ShortVideDownloader
+   git clone https://github.com/Scalza10/ShortVideoDownloader.git
+   cd ShortVideoDownloader
    ```
 
 2. **Create `.env`** from the example:
