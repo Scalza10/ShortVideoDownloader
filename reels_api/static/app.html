@@ -50,6 +50,9 @@
         <button class="chip" type="button" data-source="tiktok" aria-pressed="false">tiktok</button>
         <button class="chip" type="button" data-source="instagram" aria-pressed="false">instagram</button>
         <button class="chip" type="button" data-source="x" aria-pressed="false">x</button>
+        <button class="chip" type="button" data-source="youtube" aria-pressed="false">youtube</button>
+        <button class="chip" type="button" data-source="reddit" aria-pressed="false">reddit</button>
+        <button class="chip" type="button" data-source="facebook" aria-pressed="false">facebook</button>
       </div>
     </div>
   </div>
@@ -71,6 +74,7 @@
     <span>one cookie keeps you logged in</span>
     <span aria-hidden="true">·</span>
     <button id="logout" class="login-hint" type="button"><u>log out</u></button>
+    <a id="ios-shortcut" class="login-hint" href="{{shortcut_url}}" hidden><u>add to iPhone share sheet</u></a>
   </footer>
 </main>
 
@@ -83,13 +87,10 @@
       <div class="player-stage">
         <div class="player-frame">
           <video playsinline loop preload="auto"></video>
-          <div class="nsfw-cover" hidden>
-            <span class="nsfw-label">NSFW</span>
-            <button class="btn nsfw-reveal" type="button" data-action="reveal">tap to watch</button>
-          </div>
+          <div class="play-hint" aria-hidden="true" data-icon="play"></div>
           <div class="idle-bar">
             <div class="idle-track"><div class="idle-fill"></div></div>
-            <p class="idle-hint"><span data-icon="arrowUp"></span>swipe for the next one · tap for options</p>
+            <p class="idle-hint"><span data-icon="arrowUp"></span>swipe for the next one · tap to pause</p>
           </div>
           <div class="chrome">
             <div class="chrome-top">
@@ -101,12 +102,18 @@
               </div>
             </div>
             <div class="chrome-bottom">
-              <p class="caption js-caption"></p>
+              <div class="chrome-meta">
+                <p class="caption js-caption"></p>
+                <div class="rail">
+                  <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
+                  <button class="speed" type="button" data-action="speed" aria-label="speed 1x">1x</button>
+                  <button class="fullscreen" type="button" data-action="fullscreen" aria-label="fullscreen"></button>
+                </div>
+              </div>
               <div class="controls">
                 <span class="time js-elapsed">0:00</span>
                 <input class="scrubber" type="range" min="0" max="1" step="0.1" value="0" aria-label="seek">
                 <span class="time total js-duration">0:00</span>
-                <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
               </div>
               <div class="actions">
                 <button class="btn btn-primary share" type="button" data-action="share"><span data-icon="whatsapp"></span>Share</button>
@@ -121,6 +128,8 @@
           <input class="scrubber" type="range" min="0" max="1" step="0.1" value="0" aria-label="seek">
           <span class="time total js-duration">0:00</span>
           <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
+          <button class="speed" type="button" data-action="speed" aria-label="speed 1x">1x</button>
+          <button class="fullscreen" type="button" data-action="fullscreen" aria-label="fullscreen"></button>
         </div>
       </div>
       <aside class="player-panel">
@@ -152,6 +161,16 @@
     <button id="cookie-allow" class="btn btn-primary" type="button" autofocus>allow cookie</button>
     <p id="cookie-error" class="login-error" role="alert" hidden></p>
     <button id="cookie-decline" class="login-hint" type="button"><u>no thanks, log me out</u></button>
+  </div>
+</dialog>
+
+<!-- Asks whoever pasted a reel X marks sensitive whether it goes on the pile; nsfw.js opens it (NSFW ask spec 3). -->
+<dialog id="nsfw-ask" class="cookie-ask" aria-labelledby="nsfw-ask-title">
+  <div class="login-step">
+    <h2 id="nsfw-ask-title" class="cookie-ask-title">this one's marked NSFW</h2>
+    <p class="login-note">X flagged it as sensitive.<br>add it to the pile anyway? everyone will see it.</p>
+    <button id="nsfw-yes" class="btn btn-primary" type="button" autofocus>yes, add it</button>
+    <button id="nsfw-no" class="login-hint" type="button"><u>no, skip it</u></button>
   </div>
 </dialog>
 

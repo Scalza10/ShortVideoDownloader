@@ -1,6 +1,17 @@
-// Pure helpers shared by the board and the player.
+// Helpers shared by the board and the player. All pure, except that isIOS reads the browser.
 
-export const SOURCE_NAME = { tiktok: "TikTok", instagram: "Instagram", x: "X" };
+// iPhone or iPad, including an iPad that says it's a Mac.
+export const isIOS =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+export const SOURCE_NAME = {
+  tiktok: "TikTok",
+  instagram: "Instagram",
+  x: "X",
+  youtube: "YouTube",
+  reddit: "Reddit",
+  facebook: "Facebook",
+};
 
 const MINUTE_MS = 60_000;
 

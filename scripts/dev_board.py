@@ -17,7 +17,7 @@ make edits to reels_api/static show up on reload:
 
 Open http://localhost:8000/ in Chrome and log in with "dev". Pasted links
 wait 3 seconds, then fail if the URL contains "private", "login", "blocked",
-"novideo" or "slow", and otherwise succeed with a copy of a seed clip. An
+"novideo", "slow" or "long", and otherwise succeed with a copy of a seed clip. An
 x.com link containing "multi" is a post with 3 videos, so it adds 3 reels;
 with "partial" too, only the second of them fails. A link containing "nsfw"
 gives an NSFW reel, and seed 3 is one. The clips come in four shapes (9:16,
@@ -69,17 +69,21 @@ FAILURE_WORDS: dict[str, ErrorCode] = {
     "blocked": ErrorCode.PLATFORM_BLOCKED,
     "novideo": ErrorCode.NO_VIDEO,
     "slow": ErrorCode.TIMEOUT,
+    "long": ErrorCode.TOO_LONG,
 }
 MULTI_WORD = "multi"  # an X post with MULTI_VIDEOS videos (X links spec 6)
 MULTI_VIDEOS = 3
 PARTIAL_WORD = "partial"  # with "multi": only video 2 fails, for the "1 of 3" toast
-NSFW_WORD = "nsfw"  # a pasted link with this word gives an NSFW reel (NSFW cover spec 6)
+NSFW_WORD = "nsfw"  # a pasted link with this word gives an NSFW reel (NSFW ask spec 3: it asks first)
 NSFW_SEED = 3  # the first X seed
 SEED_SOURCES = [
     (Source.TIKTOK, "www.tiktok.com/@dev/video"),
     (Source.TIKTOK, "www.tiktok.com/@dev/video"),
     (Source.INSTAGRAM, "www.instagram.com/reel"),
     (Source.X, "x.com/dev/status"),
+    (Source.YOUTUBE, "www.youtube.com/shorts"),
+    (Source.REDDIT, "www.reddit.com/r/dev/comments"),
+    (Source.FACEBOOK, "www.facebook.com/reel"),
 ]
 CAPTIONS = [
     "Tag 1 Friend reverse this Video and look what happens @skyandtami",

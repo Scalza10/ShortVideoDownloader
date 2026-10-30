@@ -100,7 +100,10 @@ def render_expired(retention_hours: float) -> str:
     return fill(template, {"hours": retention_text(retention_hours)})
 
 
-def render_app(ask: bool) -> str:
-    """The board. ask=True when the phone's cookie was set before the login page asked (pop-up spec 4)."""
+def render_app(ask: bool, shortcut_url: str | None = None) -> str:
+    """The board. ask=True when the phone's cookie was set before the login page asked (pop-up spec 4).
+
+    shortcut_url is the iPhone shortcut's iCloud link; app.js shows it on iOS only (shortcut spec 3).
+    """
     template = (STATIC_DIR / "app.html").read_text(encoding="utf-8")
-    return fill(template, {"cookie": "ask" if ask else "agreed"})
+    return fill(template, {"cookie": "ask" if ask else "agreed", "shortcut_url": shortcut_url or ""})

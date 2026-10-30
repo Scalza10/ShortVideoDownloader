@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 import yt_dlp
+from yt_dlp.networking.exceptions import TransportError
 from yt_dlp.utils import DownloadError
 
 from reels_api import downloader
@@ -258,3 +259,199 @@ def test_download_marks_adult_content_nsfw(tmp_path, fake_ydl, age_limit, nsfw):
     fake_ydl.info = {"title": "Hello", "age_limit": age_limit}
     result = downloader.download(X_URL, tmp_path)
     assert result.info.nsfw is nsfw
+
+
+SHORT_URL = "https://www.youtube.com/shorts/dQw4w9WgXcQ"
+REDDIT_URL = "https://www.reddit.com/r/funny/comments/1abcde/a_title/"
+FACEBOOK_URL = "https://www.facebook.com/reel/1234567890"
+
+
+@pytest.mark.parametrize(
+    "url,names",
+    [
+        (X_URL, downloader.X_EXTRACTORS),
+        (SHORT_URL, ["youtube"]),
+        (REDDIT_URL, ["Reddit"]),
+        (FACEBOOK_URL, ["facebook", "facebook:reel"]),
+    ],
+)
+def test_guarded_sources_are_limited_to_their_own_extractors(tmp_path, fake_ydl, url, names):
+    downloader.download(url, tmp_path)
+    assert fake_ydl.last_opts["allowed_extractors"] == names
+
+
+@pytest.mark.parametrize("names", list(downloader.ALLOWED_EXTRACTORS.values()))
+def test_allowed_extractors_load_and_never_generic(names):
+    # A post that only links elsewhere must not be followed to that site (more sources spec 4).
+    ydl = yt_dlp.YoutubeDL({"quiet": True, "allowed_extractors": names})
+    assert sorted(ie.IE_NAME for ie in ydl._ies.values()) == sorted(names)
+    assert "Generic" not in ydl._ies
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        SHORT_URL,
+        "https://m.youtube.com/shorts/dQw4w9WgXcQ",
+        REDDIT_URL,
+        "https://old.reddit.com/r/funny/comments/1abcde/x/",
+        FACEBOOK_URL,
+        "https://www.facebook.com/watch/?v=1234567890",
+        "https://www.facebook.com/somepage/videos/1234567890/",
+    ],
+)
+def test_full_links_need_no_redirect(tmp_path, fake_ydl, monkeypatch, url):
+    monkeypatch.setattr(downloader, "_follow_redirects", lambda url, opts: pytest.fail("followed a redirect"))
+    downloader.download(url, tmp_path)
+    assert fake_ydl.last_call["url"] == url
+
+
+@pytest.mark.parametrize(
+    "share,final",
+    [
+        ("https://www.reddit.com/r/funny/s/AbCdEf123", REDDIT_URL + "?share_id=x"),
+        ("https://redd.it/1abcde", REDDIT_URL),
+        ("https://v.redd.it/abc123xyz", REDDIT_URL),
+        ("https://www.facebook.com/share/r/1AbCdEfGh/", FACEBOOK_URL + "/?mibextid=x"),
+        ("https://www.facebook.com/share/v/1AbCdEfGh/", "https://www.facebook.com/watch/?v=1234567890"),
+        ("https://fb.watch/abcDEF123/", "https://m.facebook.com/watch/?v=1234567890"),
+    ],
+)
+def test_share_links_download_where_they_lead(tmp_path, fake_ydl, monkeypatch, share, final):
+    followed = []
+    monkeypatch.setattr(downloader, "_follow_redirects", lambda url, opts: followed.append(url) or final)
+    downloader.download(share, tmp_path)
+    assert followed == [share]
+    assert fake_ydl.last_call["url"] == final
+
+
+@pytest.mark.parametrize(
+    "final,code",
+    [
+        ("https://www.youtube.com/watch?v=abc", ErrorCode.NO_VIDEO),  # off the source's own hosts
+        ("https://example.com/video", ErrorCode.NO_VIDEO),
+        ("https://www.facebook.com/login/?next=x", ErrorCode.LOGIN_REQUIRED),
+        ("https://www.facebook.com/", ErrorCode.NO_VIDEO),
+    ],
+)
+def test_share_links_that_lead_nowhere_useful_fail(tmp_path, fake_ydl, monkeypatch, final, code):
+    monkeypatch.setattr(downloader, "_follow_redirects", lambda url, opts: final)
+    with pytest.raises(JobError) as exc:
+        downloader.download("https://fb.watch/abcDEF123/", tmp_path)
+    assert exc.value.code == code
+    assert fake_ydl.last_call == {}
+
+
+@pytest.mark.parametrize(
+    "message,code",
+    [("HTTP Error 404: Not Found", ErrorCode.PRIVATE_OR_REMOVED), ("HTTP Error 403: Forbidden", ErrorCode.PLATFORM_BLOCKED)],
+)
+def test_following_a_share_link_maps_its_errors(tmp_path, monkeypatch, message, code):
+    class FailingYDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def urlopen(self, url):
+            raise TransportError(message)
+
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", FailingYDL)
+    with pytest.raises(JobError) as exc:
+        downloader.download("https://redd.it/1abcde", tmp_path)
+    assert exc.value.code == code
+
+
+def test_following_a_share_link_returns_the_final_url(monkeypatch):
+    class Response:
+        url = REDDIT_URL
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class RedirectYDL:
+        opts = None
+
+        def __init__(self, opts):
+            RedirectYDL.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def urlopen(self, url):
+            return Response()
+
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", RedirectYDL)
+    assert downloader._follow_redirects("https://redd.it/1abcde", {"quiet": True}) == REDDIT_URL
+
+
+def test_download_without_a_limit_has_no_length_filter(tmp_path, fake_ydl):
+    downloader.download("https://vm.tiktok.com/x/", tmp_path)
+    assert "match_filter" not in fake_ydl.last_opts
+
+
+@pytest.mark.parametrize("duration,skipped", [(181, True), (180, False), (12.5, False), (None, False), ("junk", False)])
+def test_length_filter_skips_long_videos_before_downloading(tmp_path, fake_ydl, duration, skipped):
+    downloader.download("https://vm.tiktok.com/x/", tmp_path, max_duration=180)
+    check = fake_ydl.last_opts["match_filter"]
+    assert bool(check({"duration": duration}, incomplete=False)) is skipped
+
+
+def test_a_video_over_the_limit_is_too_long(tmp_path, fake_ydl):
+    fake_ydl.info = {"title": "Long", "duration": 600}
+    with pytest.raises(JobError) as exc:
+        downloader.download(SHORT_URL, tmp_path, max_duration=180)
+    assert exc.value.code == ErrorCode.TOO_LONG
+    assert exc.value.message == "Videos longer than 3 minutes aren't supported."
+
+
+def test_a_long_video_skipped_by_the_filter_is_too_long_not_blocked(tmp_path, monkeypatch):
+    class SkippingYDL(FakeYDL):
+        def extract_info(self, url, download=True, process=True):
+            return {"title": "Long", "duration": 600}  # match_filter said no: no file
+
+    monkeypatch.setattr(downloader.yt_dlp, "YoutubeDL", SkippingYDL)
+    with pytest.raises(JobError) as exc:
+        downloader.download("https://vm.tiktok.com/x/", tmp_path, max_duration=180)
+    assert exc.value.code == ErrorCode.TOO_LONG
+
+
+def test_youtube_caption_is_the_title(tmp_path, fake_ydl):
+    fake_ydl.info = {"title": "cat vs cucumber #shorts", "description": "Subscribe! https://example.com #cats"}
+    result = downloader.download(SHORT_URL, tmp_path)
+    assert result.info.caption == "cat vs cucumber #shorts"
+
+
+@pytest.mark.parametrize(
+    "title,clean",
+    [
+        (
+            "9.9K views · 340 reactions | When your trying to help | Beast Camp Training",
+            "When your trying to help",
+        ),
+        ("1M views · 2.1K reactions | a | b | Some Page", "a | b"),  # a caption may hold " | " itself
+        ("12 views | short one | Some Page", "short one"),
+        ("A plain title", "A plain title"),
+        ("A plain title | Some Page", "A plain title"),
+    ],
+)
+def test_facebook_title_drops_its_counts_and_page_name(tmp_path, fake_ydl, title, clean):
+    # Facebook's title is "<views> · <reactions> | <caption> | <page>" (more sources spec 6).
+    fake_ydl.info = {"title": title, "uploader": "Some Page" if "Some Page" in title else "Beast Camp Training"}
+    result = downloader.download(FACEBOOK_URL, tmp_path)
+    assert result.info.title == clean
+
+
+def test_other_titles_keep_their_pipes(tmp_path, fake_ydl):
+    fake_ydl.info = {"title": "1M views | a | b", "uploader": "b"}
+    assert downloader.download("https://vm.tiktok.com/x/", tmp_path).info.title == "1M views | a | b"

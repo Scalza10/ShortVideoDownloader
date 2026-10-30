@@ -39,6 +39,7 @@ def fake_clips(tmp_path: Path) -> list:
         ("https://vm.tiktok.com/blocked/", ErrorCode.PLATFORM_BLOCKED),
         ("https://vm.tiktok.com/slow/", ErrorCode.TIMEOUT),
         ("https://x.com/dev/status/novideo", ErrorCode.NO_VIDEO),
+        ("https://www.youtube.com/shorts/longvideo1", ErrorCode.TOO_LONG),
     ],
 )
 def test_dev_pipeline_fails_on_keywords(tmp_path, url, code):
@@ -121,7 +122,7 @@ def test_seed_jobs(tmp_path):
     assert len(jobs) == len(dev_board.SEED_MINUTES_AGO)
     assert all(j.status == JobStatus.DONE and j.result.file_path.is_file() for j in jobs)
     assert jobs[dev_board.NO_THUMBNAIL_SEED].result.thumbnail_path is None
-    assert {j.source for j in jobs} == {Source.TIKTOK, Source.INSTAGRAM, Source.X}
+    assert {j.source for j in jobs} == set(Source)
     assert all(j.expires_at > j.finished_at for j in jobs)
     assert len({j.url for j in jobs}) == len(jobs)
 

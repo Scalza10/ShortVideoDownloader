@@ -56,6 +56,14 @@ export async function deleteJob(id, { keepalive = false } = {}) {
   if (!response.ok && response.status !== 404) throw new Error(`DELETE /jobs/${id} failed: ${response.status}`);
 }
 
+// Lets a held NSFW reel onto the pile (NSFW ask spec 3): the reel, or {error} with the server's error code.
+export async function releaseJob(id) {
+  const response = await api(`/jobs/${encodeURIComponent(id)}/ok`, { method: "PUT" });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) return body;
+  return { error: body.error || "processing_failed" };
+}
+
 // Stars or un-stars a reel (favorites spec 5): the reel, or {error} with the server's error code.
 export async function setFavorite(id, on) {
   const response = await api(`/jobs/${encodeURIComponent(id)}/favorite`, { method: on ? "PUT" : "DELETE" });

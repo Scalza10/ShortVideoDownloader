@@ -150,7 +150,7 @@ body.is-empty .board {
 }
 .tile img.loaded { opacity: 1; }
 /* A wide or square thumbnail shows whole over a blurred copy of itself, scaled past the blur's soft
-   edge. Same blur as an NSFW tile, so a covered tile looks the same whichever rule wins. */
+   edge. */
 .tile.whole img { object-fit: contain; }
 .tile.whole .tile-backdrop { object-fit: cover; filter: blur(14px) brightness(0.5); transform: scale(1.4); }
 .badge {
@@ -224,7 +224,7 @@ body.is-empty .board {
 }
 .search-toggle .icon { width: 16px; height: 16px; }
 /* A class, not [hidden]: the desktop shows the row while it's "closed". */
-.search { display: none; flex-basis: 100%; flex-direction: column; gap: 8px; }
+.search { display: none; flex-basis: 100%; min-width: 0; flex-direction: column; gap: 8px; }
 .search.is-open { display: flex; }
 .search-field {
   display: flex;
@@ -253,9 +253,12 @@ body.is-empty .board {
   color: var(--ink);
 }
 .search-field input::placeholder { color: var(--ink-42); opacity: 1; }
-.chips { display: flex; gap: 8px; }
+/* Seven chips don't fit a phone: the row scrolls sideways (more sources spec 9). */
+.chips { display: flex; gap: 8px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
 /* Pressed is an outline, so it doesn't read as the selected tab, which is filled. */
 .chip {
+  flex: none;
   height: 28px;
   padding: 0 12px;
   border-radius: 999px;
@@ -273,42 +276,20 @@ body.is-empty .board {
   text-align: center;
 }
 
-/* ---- NSFW cover (NSFW cover spec 4, 5) ---- */
+/* ---- NSFW label: information only, no blur (NSFW ask spec 4) ---- */
 
 .nsfw-label {
-  font: 800 15px var(--font);
-  letter-spacing: 0.16em;
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--scrim-badge);
+  font: 800 9px/1.2 var(--font);
+  letter-spacing: 0.12em;
   color: var(--danger-text);
-  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.7);
-}
-/* Scaled well past the blur's reach so no soft edge shows. No pointer events: a long press or
-   drag would otherwise offer the unblurred image (the tile itself is the button). */
-.tile.nsfw img {
-  filter: blur(14px) brightness(0.5);
-  transform: scale(1.4);
-  pointer-events: none;
-  -webkit-touch-callout: none;
-}
-.tile.nsfw .nsfw-label {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   pointer-events: none;
 }
-.player.is-covered .player-frame video { filter: blur(28px) brightness(0.45); transform: scale(1.3); }
-.nsfw-cover {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-}
-.nsfw-cover .nsfw-label { font-size: 26px; }
-.nsfw-cover .nsfw-reveal { height: 40px; background: rgba(0, 0, 0, 0.35); } /* beats .btn, defined later */
 
 /* ---- empty pile (spec 6.4) ---- */
 
@@ -348,6 +329,9 @@ body.is-empty .empty { flex: 1; min-height: 0; padding-bottom: 0; }
   color: var(--ink-50);
 }
 .board-foot .login-hint { margin-top: 0; }
+/* Too long to share log out's line on a phone, so it gets its own (shortcut spec 3). */
+.board-foot { flex-wrap: wrap; }
+#ios-shortcut { flex-basis: 100%; }
 body.is-empty .board-foot { margin-top: 0; }
 
 /* ---- desktop board (spec 5.1, 6.1, 6.2) ---- */
@@ -375,6 +359,7 @@ body.is-empty .board-foot { margin-top: 0; }
   .search { display: flex; flex-basis: auto; flex-direction: row; align-items: center; gap: 10px; margin-left: auto; }
   .search-field { width: 220px; height: 32px; }
   .tile-star { top: 8px; right: 8px; }
+  .nsfw-label { top: 8px; left: 8px; padding: 3px 7px; border-radius: 5px; font-size: 10px; }
   .tile { border-radius: 8px; }
   .badge { left: 8px; bottom: 8px; gap: 4px; padding: 3px 7px; border-radius: 5px; font-size: 10px; }
   .badge .icon { width: 9px; height: 9px; }
@@ -608,6 +593,25 @@ body.player-open { overflow: hidden; }
 /* Never cropped: a reel that isn't the screen's shape gets black bars, as on TikTok. */
 .player-frame video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 
+/* The ▶ while paused (fullscreen spec 3.1). A picture only: a tap on it is a tap on the video. */
+.play-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  margin: -36px 0 0 -36px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  color: rgba(255, 255, 255, 0.92);
+  pointer-events: none;
+}
+.play-hint .icon { width: 28px; height: 28px; margin-left: 4px; } /* the triangle looks centred */
+.player.is-paused .play-hint { display: flex; }
+
 .idle-bar {
   position: absolute;
   left: 0;
@@ -693,11 +697,31 @@ body.player-open { overflow: hidden; }
 .controls { display: flex; align-items: center; gap: 10px; margin: 16px 0 14px; }
 .time { flex: none; font: 500 10.5px var(--mono); color: var(--ink); font-variant-numeric: tabular-nums; }
 .time.total { color: var(--ink-70); }
-.volume { display: flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; color: var(--ink); }
+.volume, .fullscreen { display: flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; color: var(--ink); }
 .volume .icon { width: 17px; height: 17px; stroke-width: 1.8; }
+.fullscreen .icon { width: 16px; height: 16px; stroke-width: 1.8; }
+/* 1x is quiet like the total time; a sped-up reel is obvious at a glance (fullscreen spec 3.4). */
+.speed { flex: none; min-width: 34px; height: 28px; font: 500 11px var(--mono); color: var(--ink-70); font-variant-numeric: tabular-nums; }
+.speed.is-fast { color: var(--accent-bright); }
+/* Phone: volume, speed and fullscreen stack on the right of the video, each on its own row, so a tap
+   can't hit a neighbour; the scrubber keeps the full width (side rail spec 4.2). */
+.chrome-meta { display: flex; align-items: flex-end; gap: 12px; }
+.chrome-meta .caption { flex: 1; min-width: 0; }
+/* Each circle is 44px, but its button reaches halfway into the 12px gaps (clear padding), so a tap between two
+   hits one of them rather than the video; the negative margin keeps the circles where they'd be. */
+.rail { display: flex; flex: none; flex-direction: column; margin: -6px; }
+.rail > button {
+  width: 56px;
+  min-width: 0;
+  height: 56px;
+  padding: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4) content-box;
+}
 .scrubber {
   --progress: 0%;
   flex: 1;
+  width: 0; /* its intrinsic width must not widen the desktop row past the frame */
   min-width: 0;
   height: 44px; /* hit area; the visible track is 3px */
   margin: -20px 0;
@@ -771,7 +795,7 @@ body.player-open { overflow: hidden; }
     cursor: pointer;
   }
   .player-frame video { background: var(--tile); }
-  .desk-controls { display: flex; gap: 12px; margin: 0; }
+  .desk-controls { display: flex; gap: 8px; margin: 0; }
   .desk-controls .time { font-size: 11px; }
   .player-nav {
     display: flex;
@@ -811,6 +835,23 @@ body.player-open { overflow: hidden; }
 @media (min-width: 700px) and (max-width: 899px) {
   .player { --frame-max-w: calc(100vw - 340px); } /* no prev/next buttons, and the panel can shrink to 220px */
   .player-nav { display: none; }
+}
+
+/* ---- fullscreen (fullscreen spec 3.3, 4.2) ---- */
+
+/* is-fullscreen comes from fullscreenchange, so :fullscreen and :-webkit-full-screen aren't both needed.
+   The browser already makes the fullscreen stage fixed and full-size. */
+.player.is-fullscreen .player-stage { background: #000; }
+.player.is-fullscreen .idle-hint { display: none; } /* it talks about swiping, which is off */
+
+/* A desktop, or a phone turned sideways: the video above the controls row. */
+@media (min-width: 700px) {
+  .player.is-fullscreen .player-stage {
+    padding: env(safe-area-inset-top) calc(16px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom))
+      calc(16px + env(safe-area-inset-left));
+  }
+  .player.is-fullscreen .player-frame { flex: 1; width: 100%; height: auto; min-height: 0; border-radius: 0; background: #000; }
+  .player.is-fullscreen .player-frame video { background: #000; }
 }
 
 /* ---- login page (spec 8.2) ---- */

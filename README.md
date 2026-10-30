@@ -1,7 +1,7 @@
 # Reels
 
-Paste an Instagram Reel, TikTok or X (Twitter) link and get back a
-WhatsApp-friendly MP4.
+Paste an Instagram Reel, TikTok, X (Twitter), YouTube Shorts, Reddit or
+Facebook link and get back a WhatsApp-friendly MP4.
 Friends share one passcode-protected board, **the pile**, where every reel
 anyone pasted plays, shares and saves. The same service has a JSON API.
 
@@ -64,7 +64,7 @@ has to be installed.
    choose "allow cookie & log in" and enter your `WEB_PASSCODE`. Safari
    won't keep the login cookie over plain http, so use it only with HTTPS.
    Paste a TikTok or public X link to try it. Instagram usually needs
-   cookies (see [Instagram and X cookies](#instagram-and-x-cookies)).
+   cookies (see [Cookies](#cookies)).
 
 6. **Use the JSON API** with the key from `.env` (see [JSON API](#json-api)):
 
@@ -104,24 +104,36 @@ that the oldest video is deleted to make room). No names are stored or
 shown. Leave `WEB_PASSCODE` empty to disable the page; the JSON API is
 unaffected either way.
 
-- **Paste** a TikTok, Instagram or X link (or the whole share text) into
-  the field. The reel shows up for everyone. Pasting a link that is already
-  in the pile resolves to the existing reel.
+- **Paste** a TikTok, Instagram, X, YouTube Shorts, Reddit or Facebook link
+  (or the whole share text) into the field. The reel shows up for everyone.
+  Pasting a link that is already in the pile resolves to the existing reel.
+  Videos longer than `MAX_DURATION_SECONDS` (3 minutes) are refused as too
+  long.
+- **YouTube** is Shorts only (`youtube.com/shorts/…`); other YouTube links
+  are refused. **Reddit** needs reddit.com cookies (below), and the apps'
+  short share links (`/s/…`, `redd.it`, `v.redd.it`, Facebook's `/share/…`
+  and `fb.watch`) work.
 - **X links**: the video is pulled out of the tweet, including the video of
   a quoted tweet. A tweet with several videos adds each as its own reel.
   fxtwitter.com, vxtwitter.com, fixupx.com and fixvx.com links work too.
   Every X link counts as its plain x.com link, so the same tweet shared as
   twitter.com or with a different `?s=` resolves to the same reels. A tweet
   without a video says so.
-- **NSFW**: X videos that X marks as sensitive show blurred with a red NSFW
-  label, open paused until tapped, and their link preview in WhatsApp has
-  no picture. Logged out, X mostly refuses NSFW tweets altogether, so they
+- **NSFW**: when a video X marks as sensitive comes through, whoever pasted
+  it is asked "add it to the pile anyway?". Yes adds it like any other reel,
+  with a small red NSFW label on its tile; no deletes it, and nobody else ever
+  sees it. Its link preview in WhatsApp has no picture. Logged out, X mostly
+  refuses NSFW tweets altogether, so they
   need x.com cookies (below). TikTok and Instagram reels are never marked,
   and a quoted tweet's video only counts as NSFW when the quoting tweet is
   marked.
 - **Play**: tap a reel. On a phone it fills the screen: swipe up or down
-  for the next one, tap for the caption and the Share, Save and copy-link
-  buttons. On a desktop it opens as an overlay; ← → move, Esc closes.
+  for the next one, tap to pause, which also shows the caption and the
+  Share, Save and copy-link buttons (tap again to play). On a desktop it
+  opens as an overlay; click the video to pause, ← → move, Esc closes.
+  Both have a speed button (1x, 1.5x, 2x, kept from reel to reel) and a
+  fullscreen button. On Android a wide video turns the screen sideways;
+  on iPhone fullscreen is Apple's own player.
 - **Share** and **Copy link** hand out `https://<site>/?reel=<id>&k=<key>`.
   Friends with the login cookie land on the board with that reel playing.
   Anyone else gets a view-only page with just that reel: they can watch and
@@ -143,8 +155,8 @@ unaffected either way.
   brings back only the others, not the deleted one, while they are still
   in the pile.
 - **Search**: on a phone, ⌕ next to the tabs opens a search field and the
-  source chips (all, tiktok, instagram, x); on a desktop they are always
-  there. The open tab then shows only the reels from that source whose
+  source chips (all, tiktok, instagram, x, youtube, reddit, facebook; the
+  row scrolls sideways); on a desktop they are always there. The open tab then shows only the reels from that source whose
   caption or title has every word typed, in any order, ignoring case and
   accents, and the player swipes through those only. The counts stay as
   they are. ✕ closes it and shows everything again, pasting a link clears
@@ -152,7 +164,31 @@ unaffected either way.
   found through the title; TikTok's aren't.
 
 On Android, **Add to Home screen** installs the page and it then appears
-in TikTok's share menu. On iPhone, paste the link.
+in TikTok's share menu. On iPhone, use the shortcut below, or paste the link.
+
+### iPhone share sheet
+
+iOS has no share menu for web pages, but an Apple Shortcut can open the
+board with the shared link, which starts the paste. Build it once on an
+iPhone, in the Shortcuts app (+, new shortcut, name it "Reels"):
+
+1. Tap the shortcut's ⓘ, turn on **Show in Share Sheet**, and set it to
+   receive **URLs** and **Text**. Under "if there's no input", choose
+   **Get Clipboard**, so tapping it from the home screen pastes the
+   clipboard.
+2. Add **URL Encode** with *Shortcut Input*.
+3. Add **Text**: `https://<site>/?url=` followed by the *URL Encoded Text*
+   variable.
+4. Add **Open URLs** with that *Text*.
+
+Then share from TikTok, Instagram and the rest and pick "Reels". It opens
+Safari, and Safari keeps its own login cookie apart from a page added to the
+home screen, so each phone logs in once in Safari (passcode or invite link).
+The link carries no secret.
+
+To hand it out, share the shortcut (… → Share → **Copy iCloud Link**) and
+set `IOS_SHORTCUT_URL` to that link. The board then shows "add to iPhone
+share sheet" in its footer, on iPhone and iPad only.
 
 **Getting in.** Set `INVITE_TOKEN` and pin `https://<site>/join/<token>` in
 the group. Opening it explains the login cookie, and "allow cookie & join"
@@ -203,11 +239,12 @@ curl -H "X-API-Key: $API_KEY" -o video.mp4 http://localhost:8000/files/k7f3q9x2.
 | Endpoint | Returns |
 |---|---|
 | `GET /health` | `status`, `ytdlp_version`, and whether `ffmpeg` is on the path. No key needed. With the key or the login cookie it adds `recent`: `{"hours", "done", "failed"}`, the jobs that finished in the last `RETENTION_HOURS`, with the failures counted per code. Failures aren't saved, so they count from the last restart. `status` stays `ok` whatever they are. |
-| `POST /jobs` | `202 {"id", "status", "ids"}`. `ids` has one job per video: several for an X post with several videos, otherwise just `id`. For a new X link it asks X how many videos there are first, which can take up to about 20 seconds. A link that matches jobs that haven't failed returns those jobs. `400 unsupported_url` for anything but Instagram, TikTok or X, `429 too_many_jobs` when the queue has no room for all of them. |
-| `GET /jobs` | `{"jobs": [...]}`: finished reels, newest first. |
-| `GET /jobs/{id}` | The job. When done it adds `file_url`, `thumbnail_url`, `title`, `caption`, `source`, `duration_seconds`, `size_bytes`, `width`, `height`, `whatsapp_ok`, `finished_at`, `expires_at`, `share_key`, `nsfw`, `favorite` and `starred_at`. When failed it adds `error` and `message`. |
+| `POST /jobs` | `202 {"id", "status", "ids"}`. `ids` has one job per video: several for an X post with several videos, otherwise just `id`. For a new X link it asks X how many videos there are first, which can take up to about 20 seconds. A link that matches jobs that haven't failed returns those jobs. `400 unsupported_url` for anything but Instagram, TikTok, X, YouTube Shorts, Reddit or Facebook, `429 too_many_jobs` when the queue has no room for all of them. |
+| `GET /jobs` | `{"jobs": [...]}`: finished reels, newest first, without NSFW reels still waiting for a yes (`held`). |
+| `GET /jobs/{id}` | The job. When done it adds `file_url`, `thumbnail_url`, `title`, `caption`, `source`, `duration_seconds`, `size_bytes`, `width`, `height`, `whatsapp_ok`, `finished_at`, `expires_at`, `share_key`, `nsfw`, `held` (an NSFW reel kept off the pile until `PUT /jobs/{id}/ok`), `favorite` and `starred_at`. When failed it adds `error` and `message`. |
 | `GET /files/{id}.mp4` | The video, as a download named after the title. |
 | `GET /files/{id}.jpg` | The thumbnail. `404` if thumbnailing failed. |
+| `PUT /jobs/{id}/ok` | Lets a held NSFW reel onto the pile: `200` and the job. `DELETE /jobs/{id}` is the "no". |
 | `PUT /jobs/{id}/favorite` | Stars a done reel: it stays past `expires_at` until un-starred. `200` and the job. `409 favorites_full` when `MAX_FAVORITES` reels are starred. |
 | `DELETE /jobs/{id}/favorite` | Un-stars it: `200` and the job. A reel already past its `expires_at` then goes at the next hourly check. |
 | `DELETE /jobs/{id}` | Deletes a done reel and its files now, starred or not. `204`. |
@@ -219,8 +256,9 @@ or cookie, for that reel only. The favorite and delete routes answer
 
 Job statuses: `queued`, `downloading`, `processing`, `done`, `failed`.
 Failure codes: `unsupported_url`, `private_or_removed`, `no_video`,
-`login_required`, `platform_blocked`, `processing_failed`, `timeout`.
-`source` is `instagram`, `tiktok` or `x`. `whatsapp_ok` is false
+`login_required`, `platform_blocked`, `processing_failed`, `timeout`,
+`too_long` (over `MAX_DURATION_SECONDS`).
+`source` is `instagram`, `tiktok`, `x`, `youtube`, `reddit` or `facebook`. `whatsapp_ok` is false
 when the file is over 16 MB. Unknown or expired jobs return `404 not_found`.
 Starring can also answer `409 favorites_full`.
 
@@ -239,12 +277,14 @@ All values are environment variables, read from `.env`. See `.env.example`.
 | `WORKERS` | `2` | Concurrent downloads. Use `1` on a 1 GiB VM. |
 | `MAX_QUEUE` | `20` | Jobs waiting before `POST /jobs` answers 429. |
 | `JOB_TIMEOUT_SECONDS` | `180` | Download plus conversion budget per job. |
-| `COOKIES_FILE` | empty | Netscape cookies file for Instagram and X (below). |
+| `MAX_DURATION_SECONDS` | `180` | Longest video accepted; longer ones fail with `too_long` before downloading. |
+| `COOKIES_FILE` | empty | Netscape cookies file for Instagram, X, Reddit and YouTube (below). |
+| `IOS_SHORTCUT_URL` | empty | iCloud link to the iPhone share shortcut, shown in the board's footer on iOS. |
 | `PUBLIC_BASE_URL` | empty | Makes `file_url` and `thumbnail_url` absolute. |
 | `STORAGE_DIR`, `TEMP_DIR` | `/data/files`, `/data/tmp` | Where videos and in-progress downloads go. |
 | `LOG_LEVEL` | `info` | |
 
-### Instagram and X cookies
+### Cookies
 
 Instagram usually refuses anonymous downloads. Export cookies from a
 throwaway account with a browser extension that writes the Netscape
@@ -253,7 +293,12 @@ format, save as `cookies.txt`, uncomment the volume line in
 
 Public tweets download without cookies. NSFW and protected tweets fail
 with `login_required`; to allow them, export x.com cookies from a throwaway
-account into the same file (one file can hold cookies for both sites).
+account into the same file (one file can hold cookies for every site).
+
+Reddit refuses every video without a logged-in account, so Reddit links
+fail with `login_required` until the file has reddit.com cookies. YouTube
+works without cookies, but often refuses servers in data centres; its
+cookies can go in the same file too.
 
 ### When downloads start failing
 
@@ -277,7 +322,7 @@ pip install -r requirements-dev.txt
 
 python -m pytest                                    # unit tests: no network, no ffmpeg
 python -m pytest tests/test_jobs.py::test_timeout   # one test
-$env:REELS_TEST_URL = "<tiktok, instagram or x url>"; python -m pytest -m network   # real download, needs ffmpeg
+$env:REELS_TEST_URL = "<a link from any supported site>"; python -m pytest -m network   # real download, needs ffmpeg
 
 uvicorn reels_api.main:create_app --factory --reload   # needs .env
 python scripts/make_icons.py                           # regenerate the PWA icons (already committed)
@@ -291,13 +336,14 @@ Firefox. Safari refuses the `Secure` login cookie over plain http.
 `scripts/dev_board.py` serves the real page with a pile of 12 generated
 test clips and a fake downloader. Log in with passcode `dev`. Pasted links
 wait 3 seconds, then fail if the URL contains `private`, `login`,
-`blocked`, `novideo` or `slow`, and otherwise succeed with a copy of a test
+`blocked`, `novideo`, `slow` or `long`, and otherwise succeed with a copy of a test
 clip. An x.com link containing `multi` is a post with 3 videos and adds 3
 reels; add `partial` and only the second one fails. A link containing
 `nsfw` gives an NSFW reel, and one of the seeded reels is one. Seeds 1 and
 11 are favorites; seed 11 is three days old, so it only shows on the
 favorites tab.
 One seed's caption has an accent ("café au lait…"), to try search with.
+The seeds come from every source, so each chip has something to show.
 
 On start it also prints an invite link and the newest reel's share link.
 Open them in a private window to see what someone without the cookie sees.

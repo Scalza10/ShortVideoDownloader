@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from reels_api.models import (
     WHATSAPP_MAX_BYTES,
     ErrorCode,
@@ -11,6 +13,7 @@ from reels_api.models import (
     Source,
     job_to_dict,
     new_share_key,
+    too_long,
 )
 
 
@@ -35,7 +38,17 @@ def test_job_error_default_message():
 
 def test_unsupported_url_message_names_every_source():
     message = JobError(ErrorCode.UNSUPPORTED_URL).message
-    assert message == "Only Instagram, TikTok and X video links are supported."
+    assert message == "Only Instagram, TikTok, X, YouTube Shorts, Reddit and Facebook video links are supported."
+
+
+@pytest.mark.parametrize(
+    "seconds,limit",
+    [(180, "3 minutes"), (60, "1 minute"), (600, "10 minutes"), (90, "90 seconds"), (45, "45 seconds")],
+)
+def test_too_long_names_the_limit(seconds, limit):
+    err = too_long(seconds)
+    assert err.code == ErrorCode.TOO_LONG
+    assert err.message == f"Videos longer than {limit} aren't supported."
 
 
 def test_job_error_custom_message():
@@ -151,6 +164,15 @@ def test_job_to_dict_nsfw():
     job.result.nsfw = True
     assert job_to_dict(job)["nsfw"] is True
     assert "nsfw" not in job_to_dict(Job(id="q", url="u", source=Source.X))
+
+
+def test_job_to_dict_held():
+    job = Job(id="abc", url="u", source=Source.X, status=JobStatus.DONE)
+    job.result = _result(10)
+    assert job_to_dict(job)["held"] is False
+    job.held = True
+    assert job_to_dict(job)["held"] is True
+    assert "held" not in job_to_dict(Job(id="q", url="u", source=Source.X))
 
 
 def test_job_to_dict_favorite():

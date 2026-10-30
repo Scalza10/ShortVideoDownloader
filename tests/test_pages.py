@@ -127,19 +127,23 @@ def test_render_watch_has_standalone_player_markup():
     assert page.count('data-action="save"') == 2
     assert page.count('href="/?reel=abc123"') == 2
     assert "have the passcode? <u>log in</u>" in page
-    assert "tap for options" in page
+    assert "tap to pause" in page
     for gone in ("close", "prev", "next", "share", "copy", "whatsapp"):
         assert f'data-action="{gone}"' not in page, gone
 
 
-def test_both_players_have_the_nsfw_cover():
-    # The player markup lives in app.html and watch.html; the cover must be in both.
+def test_neither_player_covers_nsfw_reels():
+    # The uploader already said yes, so nothing hides the video (NSFW ask spec 4).
     for page in (pages.render_app(False), pages.render_watch(_job(), BASE)):
-        assert page.count('<div class="nsfw-cover" hidden>') == 1
-        assert page.count('data-action="reveal"') == 1
-        # Above the video, below the idle bar and the chrome: that order is the stacking.
-        cover = page.index('class="nsfw-cover"')
-        assert page.index("<video") < cover < page.index('class="idle-bar"') < page.index('class="chrome"')
+        assert "nsfw-cover" not in page
+        assert 'data-action="reveal"' not in page
+
+
+def test_the_board_has_the_nsfw_question():
+    page = pages.render_app(False)
+    assert page.count('<dialog id="nsfw-ask"') == 1
+    assert 'id="nsfw-yes"' in page and 'id="nsfw-no"' in page
+    assert 'id="nsfw-ask"' not in pages.render_watch(_job(), BASE)
 
 
 def test_render_watch_nsfw_leaks_no_image_in_any_tag():
@@ -171,7 +175,7 @@ def test_render_watch_nsfw_has_no_picture_and_says_so():
     assert meta(page, "og:title") == "wait for it"
     data = reel_data(page)
     assert data["nsfw"] is True
-    assert data["thumbnail_url"] == f"/files/abc123.jpg?k={job.share_key}"  # the page's own cover blurs it
+    assert data["thumbnail_url"] == f"/files/abc123.jpg?k={job.share_key}"  # the page itself shows it
 
 
 def test_render_watch_instagram_without_duration():
@@ -204,3 +208,20 @@ def test_render_app_marks_whether_to_ask():
     for page in (ask, agreed):
         assert "{{" not in page
         assert 'id="grid"' in page
+
+
+# ---- iPhone shortcut (shortcut spec 3)
+
+def test_render_app_links_the_iphone_shortcut():
+    page = pages.render_app(False, shortcut_url="https://www.icloud.com/shortcuts/abc123")
+    assert '<a id="ios-shortcut" class="login-hint" href="https://www.icloud.com/shortcuts/abc123" hidden>' in page
+
+
+def test_render_app_without_a_shortcut_leaves_the_link_empty():
+    assert '<a id="ios-shortcut" class="login-hint" href="" hidden>' in pages.render_app(False)
+
+
+def test_render_app_escapes_the_shortcut_url():
+    page = pages.render_app(False, shortcut_url='https://x.example/"><script>')
+    assert "<script>" not in page.split('id="ios-shortcut"')[1].split(">", 1)[0]
+    assert 'href="https://x.example/&quot;&gt;&lt;script&gt;"' in page

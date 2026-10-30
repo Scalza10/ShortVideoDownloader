@@ -92,8 +92,8 @@ def _job(entry: dict, storage_dir: Path) -> Job:
 
 
 def dumps(jobs: list[Job]) -> str:
-    """The file's text for these jobs: only the done ones."""
-    done = [job for job in jobs if job.status == JobStatus.DONE and job.result is not None]
+    """The file's text for these jobs: only the done ones nobody is still being asked about."""
+    done = [job for job in jobs if job.status == JobStatus.DONE and job.result is not None and not job.held]
     return json.dumps({"version": VERSION, "jobs": [_entry(job) for job in done]}, ensure_ascii=False)
 
 

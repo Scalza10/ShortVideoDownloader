@@ -24,6 +24,21 @@ from reels_api.urls import detect_source, extract_url, normalize_url
         ("https://www.twitter.com/user/status/1/video/2", Source.X),
         ("https://mobile.twitter.com/i/status/1", Source.X),
         ("https://m.twitter.com/user/status/1", Source.X),
+        ("https://www.youtube.com/shorts/dQw4w9WgXcQ", Source.YOUTUBE),
+        ("https://youtube.com/shorts/dQw4w9WgXcQ?si=abc", Source.YOUTUBE),
+        ("https://m.youtube.com/shorts/dQw4w9WgXcQ", Source.YOUTUBE),
+        ("https://www.reddit.com/r/funny/comments/1abcde/a_title/", Source.REDDIT),
+        ("https://reddit.com/r/funny/s/AbCdEf123", Source.REDDIT),
+        ("https://old.reddit.com/r/funny/comments/1abcde/x/", Source.REDDIT),
+        ("https://new.reddit.com/r/funny/comments/1abcde/x/", Source.REDDIT),
+        ("https://m.reddit.com/r/funny/comments/1abcde/x/", Source.REDDIT),
+        ("https://redd.it/1abcde", Source.REDDIT),
+        ("https://v.redd.it/abc123xyz", Source.REDDIT),
+        ("https://www.facebook.com/reel/1234567890", Source.FACEBOOK),
+        ("https://facebook.com/share/r/1AbCdEfGh/", Source.FACEBOOK),
+        ("https://m.facebook.com/watch/?v=1234567890", Source.FACEBOOK),
+        ("https://web.facebook.com/reel/1234567890", Source.FACEBOOK),
+        ("https://fb.watch/abcDEF123/", Source.FACEBOOK),
     ],
 )
 def test_supported_urls(url, source):
@@ -34,6 +49,13 @@ def test_supported_urls(url, source):
     "url",
     [
         "https://www.youtube.com/watch?v=abc",
+        "https://youtu.be/dQw4w9WgXcQ",  # YouTube is Shorts only (more sources spec 2)
+        "https://www.youtube.com/@someone/shorts",
+        "https://www.youtube.com/shorts/",
+        "https://www.youtube.com/playlist?list=PL123",
+        "https://music.youtube.com/shorts/dQw4w9WgXcQ",
+        "https://notreddit.com/r/funny/comments/1abcde/x/",
+        "https://facebook.com.evil.org/reel/1",
         "https://evil.instagram.com.example.org/reel/x",
         "https://notinstagram.com/reel/x",
         "ftp://www.tiktok.com/@user/video/1",
@@ -123,4 +145,35 @@ def test_normalize_url_canonicalises_x_links(url):
     ],
 )
 def test_normalize_url_leaves_other_urls(url):
+    assert normalize_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://youtube.com/shorts/dQw4w9WgXcQ?si=abc", "https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+        ("https://m.youtube.com/shorts/dQw4w9WgXcQ", "https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+        ("HTTP://WWW.YOUTUBE.COM/shorts/dQw4w9WgXcQ/", "https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+        ("https://www.youtube.com/shorts/dQw4w9WgXcQ", "https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+        (
+            "https://www.reddit.com/r/funny/comments/1abcde/x/?utm_source=share&utm_medium=web",
+            "https://www.reddit.com/r/funny/comments/1abcde/x/",
+        ),
+        ("https://reddit.com/r/funny/s/AbCdEf123?share_id=x", "https://reddit.com/r/funny/s/AbCdEf123"),
+        ("https://v.redd.it/abc123xyz#t", "https://v.redd.it/abc123xyz"),
+    ],
+)
+def test_normalize_url_gives_shorts_and_reddit_one_spelling(url, expected):
+    assert normalize_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.facebook.com/watch/?v=1234567890",  # Facebook's query is the video
+        "https://www.facebook.com/reel/1234567890?mibextid=abc",
+        "https://www.youtube.com/watch?v=abc",  # not a Short: left for detect_source to reject
+    ],
+)
+def test_normalize_url_leaves_facebook_and_other_youtube_links(url):
     assert normalize_url(url) == url

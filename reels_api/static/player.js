@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { formatDuration, slugify, sourceLine } from "./format.js";
+import { formatDuration, isIOS, slugify, sourceLine } from "./format.js";
 import { icon } from "./icons.js";
 import { showToast } from "./toast.js";
 
@@ -19,9 +19,13 @@ const SPRING_MS = 160;
 // A double tap, double-click or held Enter on delete must not take the next reel too.
 const DELETE_GUARD_MS = 700;
 
+// The speed button steps through these (fullscreen spec 3.4).
+const SPEEDS = [1, 1.5, 2];
+
+// Esc leaves fullscreen, not the player; a browser may deliver the key just after leaving (fullscreen spec 3.3).
+const FULLSCREEN_ESC_GUARD_MS = 500;
+
 // A web download on iPhone lands in Files, never Photos; the share sheet's "Save Video" does (spec 7.4).
-const isIOS =
-  /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 // Decided once, before any file exists (web spec 7.4).
 const canShareFiles =
   typeof navigator.canShare === "function" &&
@@ -53,29 +57,34 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
   const desktopClose = root.querySelector(".player-close-desktop");
   // Where focus goes when the overlay opens on desktop; the view-only page has no close button.
   const desktopFocus = desktopClose || saveButtons[saveButtons.length - 1];
-  const cover = root.querySelector(".nsfw-cover");
   const starButtons = [...root.querySelectorAll('[data-action="favorite"]')];
+  const speedButtons = [...root.querySelectorAll('[data-action="speed"]')];
+  const stage = root.querySelector(".player-stage");
+  const fullscreenButtons = [...root.querySelectorAll('[data-action="fullscreen"]')];
+  // Decided once. iPhone has no element fullscreen, only Apple's own player for a <video> (fullscreen spec 3.3).
+  const fullscreenMode =
+    document.fullscreenEnabled || document.webkitFullscreenEnabled
+      ? "element"
+      : typeof video.webkitEnterFullscreen === "function"
+        ? "video"
+        : null;
 
   let reels = []; // snapshot of the board's order, taken on open
   let index = -1;
   let pushed = false; // open() added a history entry that close() must pop
   let opener = null;
   let muted = false; // the viewer's choice carries from reel to reel
+  let speed = 0; // index into SPEEDS; carries from reel to reel like muted
+  let fullscreenEndedAt = -Infinity; // performance.now() when fullscreen last ended, for FULLSCREEN_ESC_GUARD_MS
   let frameRequest = 0;
   let drag = null; // {id, x, y, time, dy} while a finger is down on the frame
   let sliding = false;
   let prefetch = null; // {id, controller, state: "loading" | "ready" | "failed", file}
   let lastDelete = 0; // performance.now() of the last accepted delete, for DELETE_GUARD_MS
-  const uncovered = new Set(); // NSFW reels tapped open while this page is open (NSFW cover spec 5)
 
   const current = () => reels[index];
   const isOpen = () => !root.hidden;
-  const isCovered = () => root.classList.contains("is-covered");
-
-  function setCovered(covered) {
-    root.classList.toggle("is-covered", covered);
-    cover.hidden = !covered;
-  }
+  const isFullscreen = () => (document.fullscreenElement || document.webkitFullscreenElement) === stage;
 
   function setText(selector, text) {
     for (const el of root.querySelectorAll(selector)) el.textContent = text;
@@ -83,6 +92,12 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
 
   function setChrome(visible) {
     root.classList.toggle("chrome-on", visible);
+  }
+
+  // The ▶ while paused (fullscreen spec 3.1). Read from the video, not the tap, so a pause from
+  // elsewhere (a call, the lock screen, an autoplay refused even muted) shows it too.
+  function renderPaused() {
+    root.classList.toggle("is-paused", video.paused);
   }
 
   // The video always shows whole (object-fit: contain). On desktop the frame takes its shape.
@@ -95,6 +110,112 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
     for (const button of volumeButtons) {
       button.innerHTML = icon(muted ? "volumeX" : "volume2");
       button.setAttribute("aria-label", muted ? "unmute" : "mute");
+    }
+  }
+
+  function renderSpeed() {
+    const rate = SPEEDS[speed];
+    for (const button of speedButtons) {
+      button.textContent = `${rate}x`;
+      button.setAttribute("aria-label", `speed ${rate}x`);
+      button.classList.toggle("is-fast", rate !== 1);
+    }
+  }
+
+  // Both rates: loading a new src resets playbackRate to defaultPlaybackRate.
+  function applySpeed() {
+    video.defaultPlaybackRate = SPEEDS[speed];
+    video.playbackRate = SPEEDS[speed];
+  }
+
+  function nextSpeed() {
+    speed = (speed + 1) % SPEEDS.length;
+    applySpeed();
+    renderSpeed();
+  }
+
+  function renderFullscreen() {
+    const on = isFullscreen();
+    root.classList.toggle("is-fullscreen", on);
+    for (const button of fullscreenButtons) {
+      button.hidden = !fullscreenMode;
+      button.innerHTML = icon(on ? "minimize" : "maximize");
+      button.setAttribute("aria-label", on ? "exit fullscreen" : "fullscreen");
+    }
+  }
+
+  // The video's own size first; a rotated file can differ from the job's.
+  function isWide() {
+    const reel = current();
+    const width = video.videoWidth || reel.width || 0;
+    const height = video.videoHeight || reel.height || 0;
+    return width > height;
+  }
+
+  // Fullscreen is for watching: it plays and hides the options (fullscreen spec 3.3). Element mode does so once the
+  // browser agrees; Apple's player must be asked inside the tap, so "video" mode plays first.
+  async function enterFullscreen() {
+    if (fullscreenMode === "video") {
+      setChrome(false);
+      play();
+      try {
+        video.webkitEnterFullscreen();
+      } catch (_) {
+        // not ready yet (InvalidStateError): the next tap works
+      }
+      return;
+    }
+    try {
+      await (stage.requestFullscreen ? stage.requestFullscreen() : stage.webkitRequestFullscreen());
+    } catch (_) {
+      return; // refused: stay as we are
+    }
+    setChrome(false);
+    play();
+    // A wide reel turns sideways. Desktops and many browsers refuse the lock; that's fine.
+    if (isWide() && screen.orientation && typeof screen.orientation.lock === "function") {
+      screen.orientation.lock("landscape").catch(() => {});
+    }
+  }
+
+  function exitFullscreen() {
+    if (!isFullscreen()) return;
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    Promise.resolve(exit.call(document)).catch(() => {});
+  }
+
+  function toggleFullscreen() {
+    if (isFullscreen()) exitFullscreen();
+    else enterFullscreen();
+  }
+
+  // The browser only draws the fullscreen element's subtree, so the toast (the delete undo) moves into the stage
+  // while it is fullscreen (fullscreen spec 3.3). Runs once per enter and once per exit.
+  let toastHome = null; // {parent, next} while the toast is inside the stage
+  function moveToast(was, now) {
+    const toast = document.getElementById("toast");
+    if (!toast) return;
+    if (!was && now) {
+      toastHome = { parent: toast.parentNode, next: toast.nextSibling };
+      stage.appendChild(toast);
+    } else if (was && !now && toastHome) {
+      const { parent, next } = toastHome;
+      parent.insertBefore(toast, next && next.parentNode === parent ? next : null);
+      toastHome = null;
+    }
+  }
+
+  // Also runs when Esc or the system back gesture ends fullscreen. Crossing 700px never does.
+  function onFullscreenChange() {
+    const was = root.classList.contains("is-fullscreen");
+    renderFullscreen();
+    moveToast(was, isFullscreen());
+    if (!was || isFullscreen()) return;
+    fullscreenEndedAt = performance.now();
+    try {
+      screen.orientation.unlock();
+    } catch (_) {
+      // nothing was locked, or no Screen Orientation API
     }
   }
 
@@ -168,28 +289,22 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
   }
 
   function play() {
-    if (isCovered()) return; // an NSFW reel waits for a tap
     video.muted = muted;
     const attempt = video.play();
+    renderPaused(); // now, not on the "play" event, so the ▶ never flashes between reels
     if (!attempt) return;
     attempt.catch((err) => {
-      if (err.name !== "NotAllowedError" || video.muted) return;
+      if (err.name !== "NotAllowedError" || video.muted) {
+        renderPaused(); // refused even muted, or cut short: the ▶ offers a tap
+        return;
+      }
       // No sound allowed without a fresh tap: play muted and show it.
       muted = true;
       renderVolume();
       video.muted = true;
-      video.play().catch(() => {});
+      video.play().catch(renderPaused);
+      renderPaused();
     });
-  }
-
-  // A tap on a covered reel: it stays uncovered while the page is open.
-  function uncover() {
-    const fromButton = cover.contains(document.activeElement);
-    uncovered.add(current().id);
-    setCovered(false);
-    play();
-    // The button just hid itself; keep keyboard focus inside the overlay.
-    if (fromButton && desktopQuery.matches && desktopFocus) desktopFocus.focus();
   }
 
   function show(i) {
@@ -201,9 +316,7 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
     if (reel.thumbnail_url) video.poster = reel.thumbnail_url;
     else video.removeAttribute("poster");
     video.src = reel.file_url;
-    const covered = Boolean(reel.nsfw) && !uncovered.has(reel.id);
-    setCovered(covered);
-    if (covered) setChrome(false); // the cover, not the options, is what a covered reel shows first
+    applySpeed();
     setText(".js-source", sourceLine(reel));
     setText(".js-caption", reel.caption || reel.title || "");
     renderStar();
@@ -223,6 +336,8 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
     setChrome(false);
     setFrame(0, 0);
     renderVolume();
+    renderSpeed();
+    renderFullscreen();
     show(i);
     play();
     if (!standalone) {
@@ -241,12 +356,14 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
     if (!isOpen() || next < 0 || next >= reels.length) return false;
     show(next);
     play();
+    setChrome(false); // the next reel plays, so its options stay hidden (fullscreen spec 3.1)
     if (!standalone) history.replaceState({ reel: current().id }, "", reelPath(current()));
     return true;
   }
 
   function close({ fromHistory = false } = {}) {
     if (!isOpen()) return;
+    exitFullscreen();
     cancelAnimationFrame(frameRequest);
     abortPrefetch();
     drag = null;
@@ -382,7 +499,8 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
     copy: copyLink,
     save,
     volume: toggleMute,
-    reveal: uncover,
+    speed: nextSpeed,
+    fullscreen: toggleFullscreen,
     delete: () => {
       // A double tap, double-click or held Enter must not take the next reel too.
       const now = performance.now();
@@ -407,11 +525,11 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
 
   frame.addEventListener("click", (event) => {
     if (!desktopQuery.matches || event.target.closest("button, input")) return;
-    if (isCovered()) uncover();
-    else togglePlay();
+    togglePlay();
   });
 
-  // ---- phone: tap toggles the chrome, vertical swipes move through the pile (spec 7.2)
+  // ---- phone: a tap pauses and shows the options, or plays and hides them (fullscreen spec 3.1);
+  // vertical swipes move through the pile (spec 7.2)
 
   function setFrame(offset, ms) {
     frame.style.transition = ms ? `transform ${ms}ms ease-out` : "none";
@@ -446,7 +564,7 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
   });
 
   frame.addEventListener("pointermove", (event) => {
-    if (!drag || event.pointerId !== drag.id || standalone) return;
+    if (!drag || event.pointerId !== drag.id || standalone || isFullscreen()) return;
     const dy = event.clientY - drag.y;
     const pastEnd = (dy < 0 && index >= reels.length - 1) || (dy > 0 && index <= 0);
     drag.dy = dy;
@@ -459,11 +577,16 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
     drag = null;
     if (Math.hypot(event.clientX - x, event.clientY - y) < TAP_SLOP_PX) {
       setFrame(0, 0);
-      if (isCovered()) uncover();
-      else setChrome(!root.classList.contains("chrome-on"));
+      if (video.paused) {
+        play();
+        setChrome(false);
+      } else {
+        video.pause();
+        setChrome(true);
+      }
       return;
     }
-    if (standalone) return; // the frame never moved
+    if (standalone || isFullscreen()) return; // the frame never moved; no swiping in fullscreen (fullscreen spec 3.3)
     const step = dy < 0 ? 1 : -1; // finger up: next reel
     const target = index + step;
     const far = Math.abs(dy) > window.innerHeight * SWIPE_FRACTION;
@@ -492,13 +615,21 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
     if (isOpen() && video.videoWidth && video.videoHeight) fit(video.videoWidth, video.videoHeight);
   });
 
-  // play() refuses while covered, but media keys and the lock screen call the element directly.
-  video.addEventListener("play", () => {
-    if (isCovered()) video.pause();
+  video.addEventListener("play", renderPaused);
+  video.addEventListener("pause", renderPaused);
+
+  // Apple's fullscreen player has its own speed menu; follow it so our button and the next reel agree.
+  video.addEventListener("ratechange", () => {
+    const picked = SPEEDS.indexOf(video.playbackRate);
+    if (picked === -1 || picked === speed) return;
+    speed = picked;
+    video.defaultPlaybackRate = SPEEDS[speed];
+    renderSpeed();
   });
 
   video.addEventListener("error", () => {
     if (!isOpen()) return;
+    exitFullscreen();
     const gone = current();
     if (standalone) {
       onGone(gone.id); // the page decides: expired page or a toast
@@ -510,13 +641,14 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
   });
 
   function trapFocus(event) {
-    const focusable = [...root.querySelectorAll("button, input")].filter(
+    const scope = isFullscreen() ? stage : root;
+    const focusable = [...scope.querySelectorAll("button, input")].filter(
       (el) => !el.disabled && el.getClientRects().length > 0,
     );
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (!root.contains(document.activeElement)) {
+    if (!scope.contains(document.activeElement)) {
       event.preventDefault();
       first.focus();
     } else if (event.shiftKey && document.activeElement === first) {
@@ -532,6 +664,8 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
     if (!isOpen()) return;
     if (event.key === "Escape") {
       if (standalone) return;
+      // Esc leaves fullscreen, not the player (fullscreen spec 3.3).
+      if (isFullscreen() || performance.now() - fullscreenEndedAt < FULLSCREEN_ESC_GUARD_MS) return;
       event.preventDefault();
       close();
       return;
@@ -550,6 +684,9 @@ export function createPlayer({ root, onGone, onDelete = null, onFavorite = null,
       move(1);
     }
   });
+
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange);
 
   // Crossing 700px while open: CSS switches the layout; reset what only one layout uses.
   desktopQuery.addEventListener("change", () => {

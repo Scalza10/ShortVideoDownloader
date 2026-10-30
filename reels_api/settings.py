@@ -18,13 +18,15 @@ class Settings(BaseSettings):
     workers: int = 2
     max_queue: int = 20
     job_timeout_seconds: int = 180
+    max_duration_seconds: int = Field(180, ge=1)  # longer videos fail with too_long
     cookies_file: Path | None = None
     public_base_url: str | None = None
     web_passcode: str | None = None
     invite_token: str | None = Field(None, min_length=16)  # secret in /join/<token>; empty disables it
+    ios_shortcut_url: str | None = None  # iCloud link to the iPhone share shortcut (shortcut spec 3)
     log_level: str = "info"
 
-    @field_validator("invite_token", mode="before")
+    @field_validator("invite_token", "ios_shortcut_url", mode="before")
     @classmethod
-    def _empty_invite_token_is_unset(cls, value):
+    def _empty_is_unset(cls, value):
         return value or None

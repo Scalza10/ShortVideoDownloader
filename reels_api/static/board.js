@@ -59,8 +59,7 @@ export function createBoard({ grid, empty, emptyFavorites, emptySearch, count, t
       tile.append(img);
     }
     if (reel.nsfw) {
-      // Covered, not locked: the thumbnail is blurred and labelled (NSFW cover spec 4).
-      tile.classList.add("nsfw");
+      // Only a label: the uploader already said yes to it (NSFW ask spec 4).
       const label = document.createElement("span");
       label.className = "nsfw-label";
       label.textContent = "NSFW";

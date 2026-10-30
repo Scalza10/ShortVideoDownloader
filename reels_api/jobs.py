@@ -184,6 +184,7 @@ class JobManager:
                 asyncio.to_thread(self.pipeline.run, job, set_status), timeout=budget
             )
             job.result = result
+            job.held = result.nsfw  # until its uploader says yes (NSFW ask spec 3)
             job.status = JobStatus.DONE
         except asyncio.TimeoutError:
             self._fail(job, ErrorCode.TIMEOUT)
@@ -232,6 +233,16 @@ class JobManager:
             job.starred_at = None
         job.favorite = on
         await self.save()
+        return job
+
+    async def release(self, job_id: str) -> Job | None:
+        """Let a held NSFW reel onto the pile: its uploader said yes (NSFW ask spec 3). None when there is no such done reel."""
+        job = await self.store.get(job_id)
+        if job is None or job.status != JobStatus.DONE or job.result is None:
+            return None
+        if job.held:
+            job.held = False
+            await self.save()
         return job
 
     async def delete(self, job_id: str) -> bool:

@@ -25,6 +25,7 @@ from reels_api.auth import (
 )
 from reels_api.models import JobStatus
 from reels_api.pages import STATIC_DIR
+from reels_api.settings import Settings
 
 MAX_ATTEMPTS = 10
 WINDOW_SECONDS = 15 * 60
@@ -108,13 +109,13 @@ def _base_url(request: Request) -> str:
     return (configured or str(request.base_url)).rstrip("/")
 
 
-def _app_page(ask: bool) -> HTMLResponse:
-    return HTMLResponse(pages.render_app(ask), headers=NO_STORE)
+def _app_page(settings: Settings, ask: bool) -> HTMLResponse:
+    return HTMLResponse(pages.render_app(ask, settings.ios_shortcut_url), headers=NO_STORE)
 
 
-def _login_or_ask(state: str | None) -> Response:
+def _login_or_ask(settings: Settings, state: str | None) -> Response:
     """Where the login page goes: a cookie set before the login page asked gets the board and its pop-up."""
-    return _app_page(ask=True) if state == UNASKED else _login_page()
+    return _app_page(settings, ask=True) if state == UNASKED else _login_page()
 
 
 @router.get("/")
@@ -127,14 +128,14 @@ async def index(request: Request, reel: str | None = None, k: str | None = None)
     settings = request.app.state.settings
     state = session_state(settings, request.cookies.get(SESSION_COOKIE))
     if state == AGREED:
-        return _app_page(ask=False)
+        return _app_page(settings, ask=False)
     if not reel or not k:
-        return _login_or_ask(state)
+        return _login_or_ask(settings, state)
     job = await request.app.state.store.get(reel)
     if job is None:
         return HTMLResponse(pages.render_expired(settings.retention_hours), headers=NO_STORE)
     if not share_key_matches(job, k):
-        return _login_or_ask(state)  # a guessed key gets the same answer as no key
+        return _login_or_ask(settings, state)  # a guessed key gets the same answer as no key
     if job.status != JobStatus.DONE or job.result is None or not job.result.file_path.is_file():
         return HTMLResponse(pages.render_expired(settings.retention_hours), headers=NO_STORE)
     return HTMLResponse(pages.render_watch(job, _base_url(request)), headers=NO_STORE)

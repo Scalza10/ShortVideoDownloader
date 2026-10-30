@@ -40,11 +40,27 @@ def test_write_then_load_gives_the_same_reels(tmp_path):
     assert jobs_file.load(path, STORAGE) == [starred, plain]
 
 
+@pytest.mark.parametrize("source", [Source.YOUTUBE, Source.REDDIT, Source.FACEBOOK])
+def test_reels_from_the_newer_sources_load_back(tmp_path, source):
+    job = _done("new1", source=source)
+    job.result.source = source
+    path = tmp_path / "jobs.json"
+    jobs_file.write(path, jobs_file.dumps([job]))
+    assert jobs_file.load(path, STORAGE) == [job]
+
+
 def test_only_done_reels_are_saved(tmp_path):
     queued = Job(id="q1", url="u", source=Source.TIKTOK)
     failed = Job(id="f1", url="u", source=Source.TIKTOK, status=JobStatus.FAILED)
     path = tmp_path / "jobs.json"
     jobs_file.write(path, jobs_file.dumps([queued, failed, _done("d1")]))
+    assert [job.id for job in jobs_file.load(path, STORAGE)] == ["d1"]
+
+
+def test_held_reels_are_not_saved(tmp_path):
+    # Nobody said yes to it: after a restart its files are strays (NSFW ask spec 3).
+    path = tmp_path / "jobs.json"
+    jobs_file.write(path, jobs_file.dumps([_done("held1", held=True), _done("d1")]))
     assert [job.id for job in jobs_file.load(path, STORAGE)] == ["d1"]
 
 

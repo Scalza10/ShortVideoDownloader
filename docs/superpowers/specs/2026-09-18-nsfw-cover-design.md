@@ -1,7 +1,7 @@
 # NSFW Cover — Design
 
 Date: 2026-09-18
-Status: approved design, pre-implementation
+Status: implemented; sections 4 and 5 (the covers) are replaced by `2026-10-30-nsfw-ask-design.md`
 Builds on: `2026-09-18-x-links-design.md` (the "X links spec"),
 `2026-09-16-reels-board-ui-design.md` (the "board spec") and
 `2026-09-17-invite-and-share-links-design.md` (the "links spec")

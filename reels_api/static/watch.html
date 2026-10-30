@@ -28,25 +28,28 @@
       <div class="player-stage">
         <div class="player-frame">
           <video playsinline loop preload="auto"></video>
-          <div class="nsfw-cover" hidden>
-            <span class="nsfw-label">NSFW</span>
-            <button class="btn nsfw-reveal" type="button" data-action="reveal">tap to watch</button>
-          </div>
+          <div class="play-hint" aria-hidden="true" data-icon="play"></div>
           <div class="idle-bar">
             <div class="idle-track"><div class="idle-fill"></div></div>
-            <p class="idle-hint">tap for options</p>
+            <p class="idle-hint">tap to pause</p>
           </div>
           <div class="chrome">
             <div class="chrome-top">
               <span class="source"><span data-icon="clock"></span><span class="js-source"></span></span>
             </div>
             <div class="chrome-bottom">
-              <p class="caption js-caption"></p>
+              <div class="chrome-meta">
+                <p class="caption js-caption"></p>
+                <div class="rail">
+                  <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
+                  <button class="speed" type="button" data-action="speed" aria-label="speed 1x">1x</button>
+                  <button class="fullscreen" type="button" data-action="fullscreen" aria-label="fullscreen"></button>
+                </div>
+              </div>
               <div class="controls">
                 <span class="time js-elapsed">0:00</span>
                 <input class="scrubber" type="range" min="0" max="1" step="0.1" value="0" aria-label="seek">
                 <span class="time total js-duration">0:00</span>
-                <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
               </div>
               <div class="actions">
                 <button class="btn save" type="button" data-action="save"><span data-icon="download"></span><span class="spinner" aria-hidden="true"></span>Save</button>
@@ -60,6 +63,8 @@
           <input class="scrubber" type="range" min="0" max="1" step="0.1" value="0" aria-label="seek">
           <span class="time total js-duration">0:00</span>
           <button class="volume" type="button" data-action="volume" aria-label="mute"></button>
+          <button class="speed" type="button" data-action="speed" aria-label="speed 1x">1x</button>
+          <button class="fullscreen" type="button" data-action="fullscreen" aria-label="fullscreen"></button>
         </div>
       </div>
       <aside class="player-panel">

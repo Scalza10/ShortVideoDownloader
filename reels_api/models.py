@@ -15,6 +15,9 @@ class Source(StrEnum):
     INSTAGRAM = "instagram"
     TIKTOK = "tiktok"
     X = "x"
+    YOUTUBE = "youtube"
+    REDDIT = "reddit"
+    FACEBOOK = "facebook"
 
 
 class JobStatus(StrEnum):
@@ -33,18 +36,22 @@ class ErrorCode(StrEnum):
     PLATFORM_BLOCKED = "platform_blocked"
     PROCESSING_FAILED = "processing_failed"
     TIMEOUT = "timeout"
+    TOO_LONG = "too_long"
     TOO_MANY_JOBS = "too_many_jobs"
     FAVORITES_FULL = "favorites_full"
 
 
 ERROR_MESSAGES: dict[ErrorCode, str] = {
-    ErrorCode.UNSUPPORTED_URL: "Only Instagram, TikTok and X video links are supported.",
+    ErrorCode.UNSUPPORTED_URL: (
+        "Only Instagram, TikTok, X, YouTube Shorts, Reddit and Facebook video links are supported."
+    ),
     ErrorCode.PRIVATE_OR_REMOVED: "This post is private or no longer exists.",
     ErrorCode.NO_VIDEO: "This post has no video.",
     ErrorCode.LOGIN_REQUIRED: "The platform requires a login to view this post.",
     ErrorCode.PLATFORM_BLOCKED: "The platform blocked the download. Try again later.",
     ErrorCode.PROCESSING_FAILED: "The video could not be processed.",
     ErrorCode.TIMEOUT: "The download took too long and was cancelled.",
+    ErrorCode.TOO_LONG: "This video is too long.",
     ErrorCode.TOO_MANY_JOBS: "Too many downloads are queued. Try again in a minute.",
     ErrorCode.FAVORITES_FULL: "Favorites are full. Remove one first.",
 }
@@ -57,6 +64,17 @@ class JobError(Exception):
         self.code = code
         self.message = message or ERROR_MESSAGES[code]
         super().__init__(self.message)
+
+
+def too_long(max_seconds: float) -> JobError:
+    """too_long, naming the limit: "Videos longer than 3 minutes aren't supported." (more sources spec 5)."""
+    seconds = int(max_seconds)
+    if seconds % 60 == 0:
+        minutes = seconds // 60
+        limit = f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
+    else:
+        limit = f"{seconds} seconds"
+    return JobError(ErrorCode.TOO_LONG, f"Videos longer than {limit} aren't supported.")
 
 
 @dataclass
@@ -80,7 +98,7 @@ class JobResult:
     height: int | None
     thumbnail_path: Path | None = None
     caption: str | None = None
-    nsfw: bool = False  # X marks the tweet sensitive; the page covers it (NSFW cover spec 3)
+    nsfw: bool = False  # X marks the tweet sensitive; the uploader is asked first (NSFW ask spec 2)
 
     @property
     def whatsapp_ok(self) -> bool:
@@ -112,6 +130,7 @@ class Job:
     item: int = 1  # which of the post's videos, 1-based (yt-dlp's playlist_items)
     favorite: bool = False  # starred: kept past expires_at until un-starred (favorites spec 3)
     starred_at: datetime | None = None
+    held: bool = False  # an NSFW reel kept off the pile until its uploader says yes (NSFW ask spec 3)
 
 
 class CreateJobRequest(BaseModel):
@@ -152,6 +171,7 @@ def job_to_dict(job: Job, public_base_url: str | None = None) -> dict:
                 "nsfw": r.nsfw,
                 "favorite": job.favorite,
                 "starred_at": _iso_z(job.starred_at) if job.starred_at else None,
+                "held": job.held,
             }
         )
     elif job.status == JobStatus.FAILED:

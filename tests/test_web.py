@@ -12,7 +12,7 @@ from tests.test_routes import HEADERS, FakePipeline, _done_reel
 
 PASSCODE = "letmein"
 INVITE = "invite-token-0123456789"
-APP_MODULES = ["app.js", "api.js", "format.js", "icons.js", "board.js", "paste.js", "toast.js", "player.js", "watch.js", "cookie.js", "search.js"]
+APP_MODULES = ["app.js", "api.js", "format.js", "icons.js", "board.js", "paste.js", "toast.js", "player.js", "watch.js", "cookie.js", "search.js", "nsfw.js"]
 FONT_FILES = ["bricolage-grotesque-latin.woff2", "bricolage-grotesque-latin-ext.woff2"]
 GOOGLE_FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 NOTICE_LINES = (
@@ -210,6 +210,15 @@ def test_board_has_log_out(web_app):
     assert '<footer class="board-foot">' in page
     assert "one cookie keeps you logged in" in page
     assert 'id="logout"' in page
+
+
+def test_board_links_the_iphone_shortcut_when_set(web_app):
+    url = "https://www.icloud.com/shortcuts/abc123"
+    for overrides, href in (({"ios_shortcut_url": url}, url), ({}, "")):
+        with https_client(web_app(**overrides)) as client:
+            client.post("/web/login", json={"passcode": PASSCODE})
+            page = client.get("/").text
+        assert f'<a id="ios-shortcut" class="login-hint" href="{href}" hidden>' in page
 
 
 def test_board_has_the_cookie_pop_up(web_app):
@@ -716,3 +725,65 @@ def test_search_field_is_16px_so_ios_does_not_zoom(web_app):
     rule = re.search(r"\.search-field input \{([^}]*)\}", css)
     assert rule, "no .search-field input rule"
     assert re.search(r"font: \d+ 16px", rule.group(1))
+
+
+def _player_pages(web_app):
+    # The board's player and the view-only page's copy of it (CLAUDE.md: mirror any change).
+    with https_client(web_app()) as client:
+        reel = _done_reel(client)
+        view_only = client.get("/", params={"reel": reel["id"], "k": reel["share_key"]}).text
+        client.post("/web/login", json={"passcode": PASSCODE})
+        board = client.get("/").text
+    assert 'id="reel-data"' in view_only and 'id="grid"' in board  # the pages we meant
+    return {"board": board, "view-only": view_only}
+
+
+def test_player_says_tap_to_pause(web_app):
+    for name, page in _player_pages(web_app).items():
+        assert "tap for options" not in page, name
+        assert "tap to pause" in page, name
+        assert page.count('<div class="play-hint" aria-hidden="true" data-icon="play"></div>') == 1, name
+
+
+def test_player_has_the_speed_button(web_app):
+    for name, page in _player_pages(web_app).items():
+        assert page.count('data-action="speed"') == 2, name  # the phone's controls and the desktop row
+        assert page.count('<button class="speed" type="button" data-action="speed" aria-label="speed 1x">1x</button>') == 2, name
+
+
+def test_player_has_the_fullscreen_button(web_app):
+    for name, page in _player_pages(web_app).items():
+        assert page.count('<button class="fullscreen" type="button" data-action="fullscreen" aria-label="fullscreen"></button>') == 2, name
+
+
+def _between(page, start, end):
+    # The markup from `start` up to the first `end` after it.
+    i = page.index(start)
+    return page[i:page.index(end, i)]
+
+
+def test_phone_player_has_the_side_rail(web_app):
+    # Volume, speed and fullscreen stack on the right of the video, so a tap can't hit a neighbour (side rail spec).
+    for name, page in _player_pages(web_app).items():
+        assert page.count('<div class="rail">') == 1, name
+        rail = _between(page, '<div class="rail">', "</div>")
+        assert rail.index('data-action="volume"') < rail.index('data-action="speed"') < rail.index('data-action="fullscreen"'), name
+
+
+def test_phone_controls_row_is_only_the_scrubber(web_app):
+    for name, page in _player_pages(web_app).items():
+        chrome_bottom = page[page.index('<div class="chrome-bottom">'):]
+        row = _between(chrome_bottom, '<div class="controls">', "</div>")
+        assert 'class="scrubber"' in row, name
+        assert "data-action" not in row, name
+        desk = _between(page, '<div class="controls desk-controls">', "</div>")
+        for action in ("volume", "speed", "fullscreen"):
+            assert f'data-action="{action}"' in desk, (name, action)
+
+
+def test_icons_has_maximize_and_minimize(web_app):
+    # icon() throws on an unknown name, which would break the whole player.
+    with TestClient(web_app()) as client:
+        source = client.get("/static/icons.js").text
+    assert "  maximize: '" in source
+    assert "  minimize: '" in source

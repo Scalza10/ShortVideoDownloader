@@ -47,7 +47,8 @@ async def create_job(body: CreateJobRequest, request: Request) -> dict:
 async def list_jobs(request: Request) -> dict:
     jobs = await request.app.state.store.list_recent()
     base = request.app.state.settings.public_base_url
-    return {"jobs": [job_to_dict(job, base) for job in jobs]}
+    # A held reel is only on its uploader's screen, waiting for a yes (NSFW ask spec 3).
+    return {"jobs": [job_to_dict(job, base) for job in jobs if not job.held]}
 
 
 @protected.get("/jobs/{job_id}")
@@ -74,6 +75,15 @@ async def star_job(job_id: str, request: Request) -> dict:
 @protected.delete("/jobs/{job_id}/favorite")
 async def unstar_job(job_id: str, request: Request) -> dict:
     return await _star(request, job_id, False)
+
+
+@protected.put("/jobs/{job_id}/ok")
+async def ok_job(job_id: str, request: Request) -> dict:
+    """The uploader's yes to a held NSFW reel: it joins the pile; answers the reel (NSFW ask spec 3)."""
+    job = await request.app.state.manager.release(job_id)
+    if job is None:
+        raise _not_found()
+    return job_to_dict(job, request.app.state.settings.public_base_url)
 
 
 @protected.delete("/jobs/{job_id}", status_code=204)

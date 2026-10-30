@@ -2,3 +2,7 @@ fastapi==0.141.1
 uvicorn[standard]==0.53.0
 pydantic-settings==2.15.0
 yt-dlp==2026.8.19
+# YouTube's player challenges need a JavaScript runtime (more sources spec 7).
+# yt-dlp-ejs is the version yt-dlp's [default] extra names; bump both with yt-dlp.
+yt-dlp-ejs==0.8.0
+deno==2.9.7

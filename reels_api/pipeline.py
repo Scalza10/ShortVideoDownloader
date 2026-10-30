@@ -10,12 +10,12 @@ from typing import Callable
 from reels_api import downloader, media
 from reels_api.downloader import DownloadedMedia, count_videos
 from reels_api.media import ProbeResult
-from reels_api.models import Job, JobResult, JobStatus
+from reels_api.models import Job, JobResult, JobStatus, too_long
 from reels_api.settings import Settings
 
 log = logging.getLogger(__name__)
 
-Downloader = Callable[..., DownloadedMedia]  # (url, dest_dir, cookies_file, item=1)
+Downloader = Callable[..., DownloadedMedia]  # (url, dest_dir, cookies_file, item=1, max_duration=None)
 Counter = Callable[[str, Path | None], int]
 Prober = Callable[[Path], ProbeResult]
 Converter = Callable[[Path, Path, bool, float], None]
@@ -23,6 +23,8 @@ Thumbnailer = Callable[[Path, Path, float | None, float], None]
 StatusSetter = Callable[[JobStatus], None]
 
 THUMBNAIL_TIMEOUT_SECONDS = 30.0
+# A file often runs a fraction of a second past the whole seconds the platform reports.
+DURATION_GRACE_SECONDS = 1.0
 
 
 @dataclass
@@ -49,10 +51,16 @@ class Pipeline:
         thumb = self.settings.storage_dir / f"{job.id}.jpg"
         try:
             set_status(JobStatus.DOWNLOADING)
-            downloaded = self.downloader(job.url, temp_dir, self.settings.cookies_file, item=job.item)
+            max_duration = self.settings.max_duration_seconds
+            downloaded = self.downloader(
+                job.url, temp_dir, self.settings.cookies_file, item=job.item, max_duration=max_duration
+            )
 
             set_status(JobStatus.PROCESSING)
             probed = self.prober(downloaded.path)
+            # Some extractors report no duration, so the download couldn't check it (more sources spec 5).
+            if probed.duration_seconds is not None and probed.duration_seconds > max_duration + DURATION_GRACE_SECONDS:
+                raise too_long(max_duration)
             remaining = max(1.0, deadline - time.monotonic())
             self.converter(downloaded.path, dst, media.needs_transcode(probed), remaining)
 

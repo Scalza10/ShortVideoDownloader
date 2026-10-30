@@ -12,6 +12,7 @@ const HINTS = {
   no_video: "there's no video in that one.",
   login_required: "that one needs a login.",
   platform_blocked: "got blocked. try again in a bit.",
+  too_long: "it's too long.",
   too_many_jobs: "too busy right now. try again in a minute.",
   network: "no connection. try again.",
 };
@@ -39,8 +40,9 @@ async function waitForJob(id) {
 
 // The paste field: idle, fetching and error (spec 6.5). One paste at a time, but one
 // paste of an X post can bring several videos: onMore asks for their extra tiles, and
-// onDone or onFail runs once per video (X links spec 7).
-export function createPaste({ form, onStart, onMore, onDone, onFail, onStateChange }) {
+// onDone, onHeld or onFail runs once per video (X links spec 7). onHeld gets a reel held for
+// the uploader's yes and answers "added" or "skipped" (NSFW ask spec 3).
+export function createPaste({ form, onStart, onMore, onDone, onHeld, onFail, onStateChange }) {
   const input = form.querySelector("#paste-input");
   const submitButton = form.querySelector("#paste-submit");
   const iconSlot = form.querySelector("#paste-icon");
@@ -87,16 +89,19 @@ export function createPaste({ form, onStart, onMore, onDone, onFail, onStateChan
     }
     const ids = created.ids || [created.id];
     if (ids.length > 1) onMore(ids.length - 1);
-    // One at a time, so a slower pile reload never overwrites a newer one.
+    // One at a time, so a slower pile reload never overwrites a newer one, and one NSFW question at a time.
     let settled = Promise.resolve();
     let results;
     try {
       results = await Promise.all(
         ids.map(async (id) => {
           const result = await waitForJob(id);
-          settled = settled.then(() => (result.error ? onFail() : onDone(result)));
-          await settled;
-          return result;
+          settled = settled.then(() => {
+            if (result.error) return onFail();
+            return result.held ? onHeld(result) : onDone(result);
+          });
+          const outcome = await settled;
+          return outcome === "skipped" ? { skipped: true } : result;
         }),
       );
     } catch (err) {
@@ -104,7 +109,9 @@ export function createPaste({ form, onStart, onMore, onDone, onFail, onStateChan
       throw err;
     }
     const failed = results.filter((result) => result.error);
-    if (failed.length === results.length) {
+    const skipped = results.filter((result) => result.skipped).length;
+    // A "no" is neither a failure nor a reel: when nothing came through, only a failure shows the error.
+    if (failed.length && failed.length + skipped === results.length) {
       setState("error", failed[0].error);
       return;
     }

@@ -1,7 +1,9 @@
-import { Unauthorized, deleteJob, getJob, listJobs, logout, setFavorite } from "./api.js";
+import { Unauthorized, deleteJob, getJob, listJobs, logout, releaseJob, setFavorite } from "./api.js";
 import { createBoard } from "./board.js";
 import { createCookieAsk } from "./cookie.js";
+import { isIOS } from "./format.js";
 import { hydrateIcons } from "./icons.js";
+import { createNsfwAsk } from "./nsfw.js";
 import { createPaste } from "./paste.js";
 import { createPlayer } from "./player.js";
 import { createSearch } from "./search.js";
@@ -142,6 +144,46 @@ async function star(reel, on) {
 
 let pastedOver = new Set(); // the reels already on the board when the current paste started
 
+// Once per video that came through: an X post can bring several (X links spec 7).
+async function addPasted(job) {
+  // One set of jobs per URL: the link was already in the pile. Not board.has(): an earlier
+  // video's reload may already show this one.
+  const existed = pastedOver.has(job.id);
+  const jobs = (await loadJobs()) || [job, ...board.getReels().filter((reel) => reel.id !== job.id)];
+  board.finishPending(jobs);
+  player.addReels(board.getShown());
+  if (existed) board.reveal(job.id);
+}
+
+const nsfwAsk = createNsfwAsk({ dialog: $("nsfw-ask") });
+
+// A reel X marks sensitive waits off the pile until whoever pasted it says yes (NSFW ask spec 3).
+async function askAboutHeld(job) {
+  if (!(await nsfwAsk.ask())) {
+    try {
+      await deleteJob(job.id);
+    } catch (_) {
+      // a 401 is already reloading; otherwise it stays held, off the pile, until the sweep takes it
+    }
+    board.removePending();
+    return "skipped";
+  }
+  let released;
+  try {
+    released = await releaseJob(job.id);
+  } catch (err) {
+    if (err instanceof Unauthorized) return "skipped"; // api() is already reloading
+    released = { error: "network" };
+  }
+  if (released.error) {
+    board.removePending();
+    showToast("couldn't add that. try again.", { error: true });
+    return "skipped";
+  }
+  await addPasted(released);
+  return "added";
+}
+
 const paste = createPaste({
   form: $("paste"),
   onStart: () => {
@@ -152,16 +194,8 @@ const paste = createPaste({
   onMore: (n) => board.addPending(n),
   onFail: () => board.removePending(),
   onStateChange: (state) => board.setDimmed(state === "error"),
-  // Once per video: an X post can bring several (X links spec 7).
-  onDone: async (job) => {
-    // One set of jobs per URL: the link was already in the pile. Not board.has(): an earlier
-    // video's reload may already show this one.
-    const existed = pastedOver.has(job.id);
-    const jobs = (await loadJobs()) || [job, ...board.getReels().filter((reel) => reel.id !== job.id)];
-    board.finishPending(jobs);
-    player.addReels(board.getShown());
-    if (existed) board.reveal(job.id);
-  },
+  onDone: addPasted,
+  onHeld: askAboutHeld,
 });
 
 // The pile from the server without the reels being deleted here, or null when it could not be loaded.
@@ -202,7 +236,7 @@ async function openLinkedReel(id) {
   showToast("that one's gone", { error: true });
 }
 
-// Android share target: /?url=...&text=...&title=... starts a paste (web spec 7.2).
+// Android share target and the iPhone shortcut: /?url=...&text=...&title=... starts a paste (web spec 7.2).
 function consumeShareTarget() {
   const params = new URLSearchParams(location.search);
   const parts = ["url", "text", "title"].map((key) => params.get(key)).filter(Boolean);
@@ -232,6 +266,10 @@ logoutButton.addEventListener("click", async () => {
     showToast("couldn't log out. try again.", { error: true });
   }
 });
+
+// iOS has no share target; the shortcut opens /?url= in Safari instead (shortcut spec 3).
+const shortcutLink = $("ios-shortcut");
+if (isIOS && shortcutLink.getAttribute("href")) shortcutLink.hidden = false;
 
 // Runs once the page may use the cookie: at load, or after "allow cookie" (pop-up spec 6.2).
 async function start() {

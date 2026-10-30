@@ -36,7 +36,8 @@ class FakePipeline:
         if self.behaviour != "no_thumb":
             thumb = self.settings.storage_dir / f"{job.id}.jpg"
             thumb.write_bytes(b"\xff\xd8jpeg")
-        return JobResult(path, "My Cool Reel!", job.source, 2.5, 10, 1080, 1920, thumbnail_path=thumb)
+        nsfw = self.behaviour == "nsfw"
+        return JobResult(path, "My Cool Reel!", job.source, 2.5, 10, 1080, 1920, thumbnail_path=thumb, nsfw=nsfw)
 
 
 @pytest.fixture
@@ -545,6 +546,47 @@ def test_delete_job(app_factory):
         again = client.delete(f"/jobs/{reel['id']}", headers=HEADERS)
         assert again.status_code == 404
         assert again.json()["error"] == "not_found"
+
+
+def test_a_held_reel_stays_off_the_pile_until_ok(app_factory):
+    with TestClient(app_factory("nsfw")) as client:
+        reel = _done_reel(client, "https://x.com/a/status/1")
+        assert (reel["nsfw"], reel["held"]) == (True, True)
+        assert client.get("/jobs", headers=HEADERS).json()["jobs"] == []
+
+        r = client.put(f"/jobs/{reel['id']}/ok", headers=HEADERS)
+        assert r.status_code == 200
+        assert (r.json()["id"], r.json()["held"]) == (reel["id"], False)
+        assert [j["id"] for j in client.get("/jobs", headers=HEADERS).json()["jobs"]] == [reel["id"]]
+
+
+def test_a_held_reel_can_be_deleted(app_factory):
+    with TestClient(app_factory("nsfw")) as client:
+        reel = _done_reel(client, "https://x.com/a/status/1")
+        assert client.delete(f"/jobs/{reel['id']}", headers=HEADERS).status_code == 204
+        assert client.get(f"/jobs/{reel['id']}", headers=HEADERS).status_code == 404
+
+
+def test_ok_unknown_or_unfinished_is_404(app_factory):
+    app = app_factory("block")
+    gate = app.state.manager.pipeline.gate
+    try:
+        with TestClient(app) as client:
+            running = client.post("/jobs", json={"url": "https://vm.tiktok.com/1/"}, headers=HEADERS).json()["id"]
+            for job_id in ("nope", running):
+                r = client.put(f"/jobs/{job_id}/ok", headers=HEADERS)
+                assert r.status_code == 404, job_id
+                assert r.json()["error"] == "not_found"
+            gate.set()
+    finally:
+        gate.set()
+
+
+def test_ok_needs_access(app_factory):
+    with TestClient(app_factory("nsfw")) as client:
+        reel = _done_reel(client, "https://x.com/a/status/1")
+        assert client.put(f"/jobs/{reel['id']}/ok").status_code == 401
+        assert client.put(f"/jobs/{reel['id']}/ok", params={"k": reel["share_key"]}).status_code == 401
 
 
 def test_share_key_cannot_delete(app_factory):

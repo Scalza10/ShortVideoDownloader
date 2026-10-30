@@ -68,3 +68,21 @@ def test_max_favorites_default_and_minimum(monkeypatch):
     monkeypatch.setenv("MAX_FAVORITES", "0")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_max_duration_default_and_minimum(monkeypatch):
+    monkeypatch.setenv("API_KEY", "abc")
+    assert Settings(_env_file=None).max_duration_seconds == 180
+    monkeypatch.setenv("MAX_DURATION_SECONDS", "0")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_ios_shortcut_url_unset_empty_and_set(monkeypatch):
+    monkeypatch.setenv("API_KEY", "abc")
+    monkeypatch.delenv("IOS_SHORTCUT_URL", raising=False)
+    assert Settings(_env_file=None).ios_shortcut_url is None
+    monkeypatch.setenv("IOS_SHORTCUT_URL", "")
+    assert Settings(_env_file=None).ios_shortcut_url is None
+    monkeypatch.setenv("IOS_SHORTCUT_URL", "https://www.icloud.com/shortcuts/abc123")
+    assert Settings(_env_file=None).ios_shortcut_url == "https://www.icloud.com/shortcuts/abc123"

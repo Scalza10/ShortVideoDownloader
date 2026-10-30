@@ -42,7 +42,7 @@ class FakePipeline:
         self.settings.storage_dir.mkdir(parents=True, exist_ok=True)
         path = self.settings.storage_dir / f"{job.id}.mp4"
         path.write_bytes(b"\x00" * 50)
-        return JobResult(path, "T", job.source, 1.0, 50, 10, 20)
+        return JobResult(path, "T", job.source, 1.0, 50, 10, 20, nsfw=self.behaviour == "nsfw")
 
 
 async def wait_finished(store: JobStore, job_id: str, timeout=5.0):
@@ -1039,6 +1039,70 @@ async def test_delete_needs_a_done_reel(tmp_path):
     assert await manager.delete("nope") is False
     assert await manager.delete("running") is False
     assert await store.get("running") is running
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("behaviour, held", [("nsfw", True), ("ok", False)])
+async def test_an_nsfw_reel_is_held_for_its_uploaders_yes(tmp_path, behaviour, held):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings, behaviour), store)
+    await manager.start()
+    try:
+        [job] = await manager.submit("https://x.com/a/status/1")
+        done = await wait_finished(store, job.id)
+        assert done.status == JobStatus.DONE
+        assert done.held is held
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.anyio
+async def test_release_lets_a_held_reel_in_and_saves(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    job = _stored_video(settings, "v1", datetime.now(UTC))
+    job.held = True
+    await store.add(job)
+    await manager.save()
+    assert jobs_file.load(manager.jobs_path, settings.storage_dir) == []
+
+    assert await manager.release("v1") is job
+    assert job.held is False
+    assert [j.id for j in jobs_file.load(manager.jobs_path, settings.storage_dir)] == ["v1"]
+    assert await manager.release("v1") is job  # again: still in
+
+
+@pytest.mark.anyio
+async def test_release_needs_a_done_reel(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    await store.add(Job(id="queued", url="u", source=Source.TIKTOK))
+    await store.add(Job(id="failed", url="u", source=Source.TIKTOK, status=JobStatus.FAILED))
+    for job_id in ("nope", "queued", "failed"):
+        assert await manager.release(job_id) is None
+
+
+@pytest.mark.anyio
+async def test_a_held_reel_is_gone_after_a_restart(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore()
+    manager = JobManager(settings, FakePipeline(settings), store)
+    job = _stored_video(settings, "held", datetime.now(UTC))
+    job.held = True
+    await store.add(job)
+    await manager.save()
+
+    again = JobStore()
+    second = JobManager(settings, FakePipeline(settings), again)
+    await second.start()
+    try:
+        assert await again.get("held") is None
+        assert not job.result.file_path.exists()
+    finally:
+        await second.stop()
 
 
 @pytest.mark.anyio

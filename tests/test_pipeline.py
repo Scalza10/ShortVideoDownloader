@@ -10,18 +10,18 @@ from tests.conftest import make_settings
 
 
 def fake_download_factory(calls, size=100):
-    def fake_download(url, dest_dir, cookies_file=None, item=1):
-        calls.append(("download", url, dest_dir, cookies_file, item))
+    def fake_download(url, dest_dir, cookies_file=None, item=1, max_duration=None):
+        calls.append(("download", url, dest_dir, cookies_file, item, max_duration))
         p = dest_dir / "source.mp4"
         p.write_bytes(b"\x00" * size)
         return DownloadedMedia(p, MediaInfo("Title", 10.0, 720, 1280))
     return fake_download
 
 
-def fake_probe_factory(calls, video="h264", audio="aac"):
+def fake_probe_factory(calls, video="h264", audio="aac", duration=9.5):
     def fake_probe(path):
         calls.append(("probe", path))
-        return ProbeResult(video, audio, 9.5, 1080, 1920)
+        return ProbeResult(video, audio, duration, 1080, 1920)
     return fake_probe
 
 
@@ -132,7 +132,7 @@ def test_pipeline_cleans_temp_on_failure(tmp_path):
     settings = make_settings(tmp_path)
     calls = []
 
-    def failing_download(url, dest_dir, cookies_file=None, item=1):
+    def failing_download(url, dest_dir, cookies_file=None, item=1, max_duration=None):
         (dest_dir / "source.mp4.part").write_bytes(b"x")
         raise JobError(ErrorCode.LOGIN_REQUIRED)
 
@@ -214,7 +214,7 @@ def test_pipeline_passes_caption(tmp_path):
     settings = make_settings(tmp_path)
     calls = []
 
-    def download_with_caption(url, dest_dir, cookies_file=None, item=1):
+    def download_with_caption(url, dest_dir, cookies_file=None, item=1, max_duration=None):
         p = dest_dir / "source.mp4"
         p.write_bytes(b"\x00" * 10)
         return DownloadedMedia(p, MediaInfo("Title", 10.0, 720, 1280, caption="The real caption"))
@@ -234,7 +234,7 @@ def test_pipeline_passes_nsfw(tmp_path):
     settings = make_settings(tmp_path)
     calls = []
 
-    def download_nsfw(url, dest_dir, cookies_file=None, item=1):
+    def download_nsfw(url, dest_dir, cookies_file=None, item=1, max_duration=None):
         p = dest_dir / "source.mp4"
         p.write_bytes(b"\x00" * 10)
         return DownloadedMedia(p, MediaInfo("Title", 10.0, 720, 1280, nsfw=True))
@@ -276,3 +276,41 @@ def test_pipeline_count_videos_uses_counter_with_cookies(tmp_path):
     p = Pipeline(settings=settings, counter=counter)
     assert p.count_videos("https://x.com/u/status/1") == 3
     assert seen == [("https://x.com/u/status/1", cookies)]
+
+
+def test_pipeline_passes_the_length_limit_to_the_download(tmp_path):
+    settings = make_settings(tmp_path, max_duration_seconds=90)
+    calls = []
+    p = Pipeline(
+        settings=settings,
+        downloader=fake_download_factory(calls),
+        prober=fake_probe_factory(calls),
+        converter=fake_convert_factory(calls),
+        thumbnailer=fake_thumbnail_factory(calls),
+    )
+    p.run(make_job(), lambda s: None)
+    assert calls[0][5] == 90
+
+
+@pytest.mark.parametrize("duration,too_long", [(181.5, True), (180.6, False), (180.0, False), (None, False)])
+def test_pipeline_checks_the_probed_length_too(tmp_path, duration, too_long):
+    # Some extractors report no duration, so ffprobe's is checked as well (more sources spec 5).
+    # It allows a second over: a 3:00 Short's file is often a fraction longer than yt-dlp's 180.
+    settings = make_settings(tmp_path, max_duration_seconds=180)
+    calls = []
+    p = Pipeline(
+        settings=settings,
+        downloader=fake_download_factory(calls),
+        prober=fake_probe_factory(calls, duration=duration),
+        converter=fake_convert_factory(calls),
+        thumbnailer=fake_thumbnail_factory(calls),
+    )
+    if not too_long:
+        p.run(make_job(), lambda s: None)
+        return
+    with pytest.raises(JobError) as exc:
+        p.run(make_job(), lambda s: None)
+    assert exc.value.code == ErrorCode.TOO_LONG
+    assert [c[0] for c in calls] == ["download", "probe"]
+    assert not (settings.storage_dir / "job1.mp4").exists()
+    assert not (settings.temp_dir / "job1").exists()
